@@ -5,12 +5,12 @@ RUN pip install --no-cache-dir fastapi uvicorn requests
 RUN echo 'import os, requests\n\
 from fastapi import FastAPI\n\
 from fastapi.middleware.cors import CORSMiddleware\n\
+from starlette.concurrency import run_in_threadpool\n\
 \n\
 app = FastAPI()\n\
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])\n\
 \n\
-@app.api_route("/get_quotations", methods=["GET", "POST"])\n\
-def get_quotations():\n\
+def fetch_odoo_data():\n\
     url = os.environ.get("ODOO_URL", "").rstrip("/")\n\
     db = os.environ.get("ODOO_DB")\n\
     username = os.environ.get("ODOO_USERNAME")\n\
@@ -19,36 +19,36 @@ def get_quotations():\n\
     if not url.startswith("http"):\n\
         url = "https://" + url\n\
         \n\
+    session = requests.Session()\n\
     try:\n\
-        # 1. Autenticacao no Odoo\n\
-        auth_payload = {\n\
-            "jsonrpc": "2.0",\n\
-            "method": "call",\n\
+        # Autenticacao com timeout rigoroso de 4s\n\
+        auth_resp = session.post(f"{url}/jsonrpc", json={\n\
+            "jsonrpc": "2.0", "method": "call",\n\
             "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
             "id": 1\n\
-        }\n\
-        res_auth = requests.post(f"{url}/jsonrpc", json=auth_payload, timeout=5)\n\
-        uid = res_auth.json().get("result")\n\
+        }, timeout=4)\n\
         \n\
+        uid = auth_resp.json().get("result")\n\
         if not uid:\n\
-            return {"error": f"Falha no login do Odoo. Resposta: {res_auth.text}"}\n\
+            return {"error": f"Login recusado pelo Odoo. Resposta: {auth_resp.text[:100]}"}\n\
             \n\
-        # 2. Pesquisa de Cotacoes\n\
-        data_payload = {\n\
-            "jsonrpc": "2.0",\n\
-            "method": "call",\n\
+        # Consulta das cotacoes com timeout de 4s\n\
+        data_resp = session.post(f"{url}/jsonrpc", json={\n\
+            "jsonrpc": "2.0", "method": "call",\n\
             "params": {\n\
-                "service": "object",\n\
-                "method": "execute_kw",\n\
+                "service": "object", "method": "execute_kw",\n\
                 "args": [db, uid, password, "sale.order", "search_count", [[["state", "in", ["draft", "sent", "sale"]]]]]\n\
             },\n\
             "id": 2\n\
-        }\n\
-        res_data = requests.post(f"{url}/jsonrpc", json=data_payload, timeout=5)\n\
-        return {"count": res_data.json().get("result", 0)}\n\
+        }, timeout=4)\n\
         \n\
+        return {"count": data_resp.json().get("result", 0)}\n\
     except Exception as e:\n\
-        return {"error": f"Erro de ligacao: {str(e)}"}\n\
+        return {"error": f"Falha ao conectar ao Odoo ({url}): {str(e)}"}\n\
+\n\
+@app.api_route("/get_quotations", methods=["GET", "POST"])\n\
+async def get_quotations():\n\
+    return await run_in_threadpool(fetch_odoo_data)\n\
 ' > main.py
 
 EXPOSE 10000
