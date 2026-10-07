@@ -31,7 +31,7 @@ def get_quotations():\n\
             \n\
         data_req = requests.post(f"{url}/jsonrpc", json={\n\
             "jsonrpc": "2.0", "method": "call",\n\
-            "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, "sale.order", "search_count", [[["state", "=", "draft"]]]]}\n\
+            "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, "sale.order", "search_count", [[["state", "in", ["draft", "sent", "sale"]]]]}\n\
         }, timeout=10)\n\
         \n\
         return {"count": data_req.json().get("result", 0)}\n\
