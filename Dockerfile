@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-RUN pip install --no-cache-dir fastapi uvicorn requests
+RUN pip install --no-cache-dir fastapi uvicorn
 
-RUN echo 'import os, requests\n\
+RUN echo 'import os, xmlrpc.client\n\
 from fastapi import FastAPI\n\
 from fastapi.middleware.cors import CORSMiddleware\n\
 \n\
@@ -20,21 +20,16 @@ def get_quotations():\n\
         return {"error": "Variaveis de ambiente em falta no Render"}\n\
         \n\
     try:\n\
-        auth_req = requests.post(f"{url}/jsonrpc", json={\n\
-            "jsonrpc": "2.0", "method": "call",\n\
-            "params": {"service": "common", "method": "login", "args": [db, username, password]}\n\
-        }, timeout=10)\n\
+        common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")\n\
+        uid = common.authenticate(db, username, password, {})\n\
         \n\
-        uid = auth_req.json().get("result")\n\
         if not uid:\n\
-            return {"error": "Falha na autenticacao com Odoo (verifique utilizador/chave)"}\n\
+            return {"error": "Falha na autenticacao Odoo (verifique credenciais)"}\n\
             \n\
-        data_req = requests.post(f"{url}/jsonrpc", json={\n\
-            "jsonrpc": "2.0", "method": "call",\n\
-            "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, "sale.order", "search_count", [[["state", "in", ["draft", "sent", "sale"]]]]}\n\
-        }, timeout=10)\n\
+        models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")\n\
+        count = models.execute_kw(db, uid, password, "sale.order", "search_count", [[["state", "in", ["draft", "sent", "sale"]]]])\n\
         \n\
-        return {"count": data_req.json().get("result", 0)}\n\
+        return {"count": count}\n\
     except Exception as e:\n\
         return {"error": str(e)}\n\
 ' > main.py
