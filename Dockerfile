@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware\n\
 app = FastAPI()\n\
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])\n\
 \n\
-@app.post("/get_quotations")\n\
+@app.api_route("/get_quotations", methods=["GET", "POST"])\n\
 def get_quotations():\n\
     url = os.environ.get("ODOO_URL", "").rstrip("/")\n\
     db = os.environ.get("ODOO_DB")\n\
@@ -24,7 +24,7 @@ def get_quotations():\n\
         uid = common.authenticate(db, username, password, {})\n\
         \n\
         if not uid:\n\
-            return {"error": "Falha na autenticacao Odoo (verifique credenciais)"}\n\
+            return {"error": "Falha na autenticacao Odoo"}\n\
             \n\
         models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")\n\
         count = models.execute_kw(db, uid, password, "sale.order", "search_count", [[["state", "in", ["draft", "sent", "sale"]]]])\n\
