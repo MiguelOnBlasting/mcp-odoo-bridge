@@ -44,7 +44,7 @@ def parse_any_payload(raw_data):
     limit = 5
     offset = 0
 
-    # 1. Se vier como Dicionario JSON (Formato ideal)
+    # 1. Se vier como Dicionario JSON
     if isinstance(raw_data, dict):
         model = raw_data.get("model") or model
         action = raw_data.get("action") or action
@@ -57,7 +57,7 @@ def parse_any_payload(raw_data):
         try: offset = int(raw_data.get("offset", 0))
         except: offset = 0
 
-    # 2. Se vier como Lista Posicional (Qualquer ordem)
+    # 2. Se vier como Lista Posicional
     elif isinstance(raw_data, list):
         for item in raw_data:
             if isinstance(item, int):
@@ -192,4 +192,23 @@ async def query_odoo(request: Request):
             elif action == "count":
                 res = requests.post(f"{url}/jsonrpc", json={
                     "jsonrpc": "2.0", "method": "call",
-                    "params":
+                    "params": {
+                        "service": "object",
+                        "method": "execute_kw",
+                        "args": [db, uid, password, model, "search_count", [domain]]
+                    },
+                    "id": 2
+                }, timeout=20)
+                res_json = res.json()
+                if "error" in res_json:
+                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
+                    return JSONResponse(content={"status": "error", "message": f"Erro search_count ({model}): {err_details}"}, status_code=200)
+                return JSONResponse(content={"status": "success", "count": res_json.get("result", 0)}, status_code=200)
+
+            else:
+                res = requests.post(f"{url}/jsonrpc", json={
+                    "jsonrpc": "2.0", "method": "call",
+                    "params": {
+                        "service": "object",
+                        "method": "execute_kw",
+                        "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "
