@@ -1,4 +1,4 @@
-import os, requests, json
+import os, requests, json, re
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Campos padrao para fallback quando a IA nao especifica campos
 KNOWN_FIELDS = {
     "res.partner": ["id", "name", "email", "phone", "city"],
     "hr.employee": ["id", "name", "work_email", "work_phone", "department_id"],
@@ -26,8 +27,26 @@ def safe_parse_json(val):
     except Exception:
         return None
 
+def get_valid_model_fields(url, db, uid, password, model):
+    """Descobre dinamicamente os campos reais da tabela no Odoo."""
+    try:
+        res = requests.post(f"{url}/jsonrpc", json={
+            "jsonrpc": "2.0", "method": "call",
+            "params": {
+                "service": "object",
+                "method": "execute_kw",
+                "args": [db, uid, password, model, "fields_get", [], {"attributes": ["string", "type"]}]
+            },
+            "id": 99
+        }, timeout=5)
+        res_json = res.json()
+        if "result" in res_json and isinstance(res_json["result"], dict):
+            return set(res_json["result"].keys())
+    except Exception:
+        pass
+    return None
+
 def parse_flexible_payload(payload):
-    """Extrai model, action, domain, fields, etc., quer venham como dict ou como list posicional."""
     model = "sale.order"
     action = "read"
     domain = []
@@ -37,7 +56,20 @@ def parse_flexible_payload(payload):
     limit = 5
     offset = 0
 
-    if isinstance(payload, dict):
+    if isinstance(payload, str):
+        str_val = payload.strip()
+        if "model:" in str_val:
+            m = re.search(r'model:\s*([a-zA-Z0-9._]+)', str_val)
+            if m: model = m.group(1)
+        if "read" in str_val: action = "read"
+        elif "count" in str_val: action = "count"
+        elif "aggregate" in str_val: action = "aggregate"
+        if "fields:" in str_val:
+            f_match = re.search(r'fields:\s*\[(.*?)\]', str_val)
+            if f_match:
+                fields = [f.strip() for f in f_match.group(1).split(",") if f.strip()]
+
+    elif isinstance(payload, dict):
         model = payload.get("model") or model
         action = payload.get("action") or action
         domain = safe_parse_json(payload.get("domain")) or []
@@ -54,7 +86,6 @@ def parse_flexible_payload(payload):
             offset = 0
 
     elif isinstance(payload, list):
-        # Interpretacao inteligente de listas posicionais enviadas pelo TypingMind
         for item in payload:
             if isinstance(item, str):
                 if item in ["read", "count", "aggregate"]:
@@ -76,8 +107,12 @@ async def query_odoo(request: Request):
     try:
         try:
             payload = await request.json()
-        except Exception as pe:
-            return JSONResponse(content={"status": "error", "message": f"Erro JSON no Payload: {str(pe)}"}, status_code=200)
+        except Exception:
+            try:
+                body_bytes = await request.body()
+                payload = body_bytes.decode("utf-8").strip('"')
+            except Exception as pe:
+                return JSONResponse(content={"status": "error", "message": f"Erro de Payload: {str(pe)}"}, status_code=200)
 
         url = os.environ.get("ODOO_URL", "").rstrip("/")
         db = os.environ.get("ODOO_DB")
@@ -85,15 +120,12 @@ async def query_odoo(request: Request):
         password = os.environ.get("ODOO_PASSWORD") or os.environ.get("ODOO_API_KEY")
 
         if not url:
-            return JSONResponse(content={"status": "error", "message": "ODOO_URL nao configurada no Render."}, status_code=200)
+            return JSONResponse(content={"status": "error", "message": "ODOO_URL nao configurada."}, status_code=200)
 
         if not url.startswith("http"):
             url = "https://" + url
 
-        model, action, domain, fields, agg_field, groupby, limit, offset = parse_flexible_payload(payload)
-
-        if not fields or not isinstance(fields, list):
-            fields = KNOWN_FIELDS.get(model, ["id", "display_name"])
+        model, action, domain, raw_fields, agg_field, groupby, limit, offset = parse_flexible_payload(payload)
 
         # 1. Login no Odoo
         try:
@@ -112,7 +144,23 @@ async def query_odoo(request: Request):
         except Exception as ae:
             return JSONResponse(content={"status": "error", "message": f"Falha ligacao Odoo: {str(ae)}"}, status_code=200)
 
-        # 2. Execucao de chamadas
+        # 2. Filtragem e validacao 100% dinamica de campos com Odoo ORM
+        valid_odoo_fields = get_valid_model_fields(url, db, uid, password, model)
+        
+        if raw_fields and isinstance(raw_fields, list):
+            cleaned_fields = []
+            for f in raw_fields:
+                if isinstance(f, str):
+                    if valid_odoo_fields:
+                        if f in valid_odoo_fields:
+                            cleaned_fields.append(f)
+                    else:
+                        cleaned_fields.append(f)
+            fields = cleaned_fields if cleaned_fields else KNOWN_FIELDS.get(model, ["id", "display_name"])
+        else:
+            fields = KNOWN_FIELDS.get(model, ["id", "display_name"])
+
+        # 3. Execucao das chamadas
         if action == "aggregate":
             res = requests.post(f"{url}/jsonrpc", json={
                 "jsonrpc": "2.0", "method": "call",
@@ -139,27 +187,3 @@ async def query_odoo(request: Request):
                 },
                 "id": 2
             }, timeout=20)
-            res_json = res.json()
-            if "error" in res_json:
-                err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
-                return JSONResponse(content={"status": "error", "message": f"Erro search_count ({model}): {err_details}"}, status_code=200)
-            return JSONResponse(content={"status": "success", "count": res_json.get("result", 0)}, status_code=200)
-
-        else:
-            res = requests.post(f"{url}/jsonrpc", json={
-                "jsonrpc": "2.0", "method": "call",
-                "params": {
-                    "service": "object",
-                    "method": "execute_kw",
-                    "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit, "offset": offset, "order": "id desc"}]
-                },
-                "id": 2
-            }, timeout=20)
-            res_json = res.json()
-            if "error" in res_json:
-                err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
-                return JSONResponse(content={"status": "error", "message": f"Erro search_read ({model}): {err_details}"}, status_code=200)
-            return JSONResponse(content={"status": "success", "data": res_json.get("result", [])}, status_code=200)
-
-    except Exception as ge:
-        return JSONResponse(content={"status": "error", "message": f"Excecao servidor: {str(ge)}"}, status_code=200)
