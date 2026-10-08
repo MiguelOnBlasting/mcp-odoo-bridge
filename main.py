@@ -193,41 +193,4 @@ async def query_odoo(request: Request):
                 res = requests.post(f"{url}/jsonrpc", json={
                     "jsonrpc": "2.0", "method": "call",
                     "params": {
-                        "service": "object",
-                        "method": "execute_kw",
-                        "args": [db, uid, password, model, "search_count", [domain]]
-                    },
-                    "id": 2
-                }, timeout=20)
-                res_json = res.json()
-                if "error" in res_json:
-                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
-                    return JSONResponse(content={"status": "error", "message": f"Erro search_count ({model}): {err_details}"}, status_code=200)
-                return JSONResponse(content={"status": "success", "count": res_json.get("result", 0)}, status_code=200)
-
-            else:
-                read_params = {
-                    "fields": fields,
-                    "limit": limit,
-                    "offset": offset,
-                    "order": "id desc"
-                }
-                res = requests.post(f"{url}/jsonrpc", json={
-                    "jsonrpc": "2.0", "method": "call",
-                    "params": {
-                        "service": "object",
-                        "method": "execute_kw",
-                        "args": [db, uid, password, model, "search_read", [domain], read_params]
-                    },
-                    "id": 2
-                }, timeout=20)
-                res_json = res.json()
-                if "error" in res_json:
-                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
-                    return JSONResponse(content={"status": "error", "message": f"Erro search_read ({model}): {err_details}"}, status_code=200)
-                return JSONResponse(content={"status": "success", "data": res_json.get("result", [])}, status_code=200)
-        except Exception as oe:
-            return JSONResponse(content={"status": "error", "message": f"Erro na execucao Odoo: {str(oe)}"}, status_code=200)
-
-    except Exception as ge:
-        return JSONResponse(content={"status": "error", "message": f"Excecao servidor: {str(ge)}"}, status_code=200)
+                        "service": "
