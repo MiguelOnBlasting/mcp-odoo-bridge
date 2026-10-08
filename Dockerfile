@@ -24,7 +24,6 @@ def query_odoo(payload: dict = Body(...)):\n\
     action = payload.get("action", "count")\n\
     limit = payload.get("limit", 5)\n\
     \n\
-    # Define campos padrao seguros caso nao venham especificados\n\
     fields = payload.get("fields")\n\
     if not fields:\n\
         if model == "res.partner":\n\
@@ -47,18 +46,28 @@ def query_odoo(payload: dict = Body(...)):\n\
         if not uid:\n\
             return {"status": "error", "message": "Falha na autenticacao do Odoo"}\n\
             \n\
-        # 2. Execucao dinamica\n\
+        # 2. Execucao de Count\n\
         if action == "count":\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
-                "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, model, "search_count", [domain]]},\n\
+                "params": {\n\
+                    "service": "object",\n\
+                    "method": "execute_kw",\n\
+                    "args": [db, uid, password, model, "search_count", [domain]]\n\
+                },\n\
                 "id": 2\n\
             }, timeout=8)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
+            \n\
+        # 3. Execucao de Read (Odoo requer kwargs como 6º argumento em args)\n\
         else:\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
-                "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit}]},\n\
+                "params": {\n\
+                    "service": "object",\n\
+                    "method": "execute_kw",\n\
+                    "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit}]\n\
+                },\n\
                 "id": 2\n\
             }, timeout=8)\n\
             return {"status": "success", "data": res.json().get("result", [])}\n\
