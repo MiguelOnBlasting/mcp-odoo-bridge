@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Campos padrao para fallback quando a IA nao especifica campos
 KNOWN_FIELDS = {
     "res.partner": ["id", "name", "email", "phone", "city"],
     "hr.employee": ["id", "name", "work_email", "work_phone", "department_id"],
@@ -15,20 +14,8 @@ KNOWN_FIELDS = {
     "product.product": ["id", "display_name", "list_price", "qty_available"]
 }
 
-def safe_parse_json(val):
-    if not val or not isinstance(val, str):
-        return val if isinstance(val, (list, dict)) else None
-    clean = val.strip()
-    if not clean or (clean.startswith("{") and clean.endswith("}") and ":" not in clean):
-        return None
-    clean_json = clean.replace("'", '"')
-    try:
-        return json.loads(clean_json)
-    except Exception:
-        return None
-
 def get_valid_model_fields(url, db, uid, password, model):
-    """Descobre dinamicamente os campos reais da tabela no Odoo."""
+    """Consulta o Odoo via fields_get para descobrir os campos reais da tabela."""
     try:
         res = requests.post(f"{url}/jsonrpc", json={
             "jsonrpc": "2.0", "method": "call",
@@ -46,7 +33,8 @@ def get_valid_model_fields(url, db, uid, password, model):
         pass
     return None
 
-def parse_flexible_payload(payload):
+def parse_any_payload(raw_data):
+    """Converte QUALQUER tipo de dados (dict, list, string) numa consulta estruturada."""
     model = "sale.order"
     action = "read"
     domain = []
@@ -56,37 +44,22 @@ def parse_flexible_payload(payload):
     limit = 5
     offset = 0
 
-    if isinstance(payload, str):
-        str_val = payload.strip()
-        if "model:" in str_val:
-            m = re.search(r'model:\s*([a-zA-Z0-9._]+)', str_val)
-            if m: model = m.group(1)
-        if "read" in str_val: action = "read"
-        elif "count" in str_val: action = "count"
-        elif "aggregate" in str_val: action = "aggregate"
-        if "fields:" in str_val:
-            f_match = re.search(r'fields:\s*\[(.*?)\]', str_val)
-            if f_match:
-                fields = [f.strip() for f in f_match.group(1).split(",") if f.strip()]
+    # 1. Se vier como Dicionario JSON
+    if isinstance(raw_data, dict):
+        model = raw_data.get("model") or model
+        action = raw_data.get("action") or action
+        domain = raw_data.get("domain") or []
+        fields = raw_data.get("fields")
+        agg_field = raw_data.get("agg_field") or agg_field
+        groupby = raw_data.get("groupby") or []
+        try: limit = int(raw_data.get("limit", 5))
+        except: limit = 5
+        try: offset = int(raw_data.get("offset", 0))
+        except: offset = 0
 
-    elif isinstance(payload, dict):
-        model = payload.get("model") or model
-        action = payload.get("action") or action
-        domain = safe_parse_json(payload.get("domain")) or []
-        fields = safe_parse_json(payload.get("fields"))
-        agg_field = payload.get("agg_field") or agg_field
-        groupby = safe_parse_json(payload.get("groupby")) or []
-        try:
-            limit = int(payload.get("limit", 5))
-        except Exception:
-            limit = 5
-        try:
-            offset = int(payload.get("offset", 0))
-        except Exception:
-            offset = 0
-
-    elif isinstance(payload, list):
-        for item in payload:
+    # 2. Se vier como Lista Posicional
+    elif isinstance(raw_data, list):
+        for item in raw_data:
             if isinstance(item, str):
                 if item in ["read", "count", "aggregate"]:
                     action = item
@@ -100,19 +73,46 @@ def parse_flexible_payload(payload):
                 elif item and isinstance(item[0], str):
                     fields = item
 
+    # 3. Se vier como String Bruta
+    elif isinstance(raw_data, str):
+        str_val = raw_data.strip()
+        if "hr.employee" in str_val: model = "hr.employee"
+        elif "res.partner" in str_val: model = "res.partner"
+        elif "account.move" in str_val: model = "account.move"
+        elif "product.product" in str_val: model = "product.product"
+        
+        if "count" in str_val: action = "count"
+        elif "aggregate" in str_val: action = "aggregate"
+        else: action = "read"
+
+    # Se domain for string, tenta JSON
+    if isinstance(domain, str):
+        try: domain = json.loads(domain)
+        except: domain = []
+
+    # Se fields for string, tenta JSON
+    if isinstance(fields, str):
+        try: fields = json.loads(fields)
+        except: fields = None
+
     return model, action, domain, fields, agg_field, groupby, limit, offset
 
 @app.post("/query")
 async def query_odoo(request: Request):
     try:
+        # Extrai os dados sem falhar no parsing de JSON rígido
         try:
             payload = await request.json()
         except Exception:
             try:
                 body_bytes = await request.body()
-                payload = body_bytes.decode("utf-8").strip('"')
+                body_str = body_bytes.decode("utf-8").strip()
+                try:
+                    payload = json.loads(body_str)
+                except Exception:
+                    payload = body_str
             except Exception as pe:
-                return JSONResponse(content={"status": "error", "message": f"Erro de Payload: {str(pe)}"}, status_code=200)
+                return JSONResponse(content={"status": "error", "message": f"Erro leitura payload: {str(pe)}"}, status_code=200)
 
         url = os.environ.get("ODOO_URL", "").rstrip("/")
         db = os.environ.get("ODOO_DB")
@@ -125,7 +125,7 @@ async def query_odoo(request: Request):
         if not url.startswith("http"):
             url = "https://" + url
 
-        model, action, domain, raw_fields, agg_field, groupby, limit, offset = parse_flexible_payload(payload)
+        model, action, domain, raw_fields, agg_field, groupby, limit, offset = parse_any_payload(payload)
 
         # 1. Login no Odoo
         try:
@@ -144,7 +144,7 @@ async def query_odoo(request: Request):
         except Exception as ae:
             return JSONResponse(content={"status": "error", "message": f"Falha ligacao Odoo: {str(ae)}"}, status_code=200)
 
-        # 2. Filtragem e validacao dinamica de campos com Odoo ORM
+        # 2. Validacao dinamica de campos com Odoo ORM (descarta automaticamente campos que nao existem)
         valid_odoo_fields = get_valid_model_fields(url, db, uid, password, model)
         
         if raw_fields and isinstance(raw_fields, list):
@@ -160,7 +160,7 @@ async def query_odoo(request: Request):
         else:
             fields = KNOWN_FIELDS.get(model, ["id", "display_name"])
 
-        # 3. Execucao das chamadas
+        # 3. Execucao das chamadas Odoo
         try:
             if action == "aggregate":
                 res = requests.post(f"{url}/jsonrpc", json={
