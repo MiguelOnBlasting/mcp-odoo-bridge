@@ -10,7 +10,7 @@ DEFAULT_FIELDS = {
     "hr.employee": ["id", "name", "work_email", "job_title", "department_id"],
     "res.partner": ["id", "name", "email", "phone", "vat", "street", "city"],
     "sale.order": ["id", "name", "partner_id", "amount_total", "state", "date_order"],
-    "account.move": ["id", "name", "partner_id", "amount_total", "state", "invoice_date"],
+    "account.move": ["id", "name", "partner_id", "amount_total", "amount_residual", "state", "payment_state", "move_type", "invoice_date"],
     "product.product": ["id", "display_name", "list_price", "qty_available"],
     "product.template": ["id", "name", "list_price", "qty_available"]
 }
@@ -30,7 +30,7 @@ async def query_odoo(request: Request):
         limit = int(body.get("limit", 5))
         order = body.get("order", "id desc")
 
-        # Fallback de Modelo: Se o LLM pedir "product.template", aceita ou redireciona
+        # Tratamento de domain
         if isinstance(domain, str):
             try:
                 domain = json.loads(domain.replace("'", '"'))
