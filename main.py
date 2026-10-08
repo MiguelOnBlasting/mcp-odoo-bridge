@@ -24,42 +24,32 @@ DEFAULT_FIELDS = {
 }
 
 def clean_domain(domain_raw):
-    """Normaliza e limpa a lista de filtros domain, removendo aspas externas de arrays serializados."""
     if not domain_raw:
         return []
-    
     if isinstance(domain_raw, str):
-        try:
-            domain_raw = json.loads(domain_raw)
+        try: domain_raw = json.loads(domain_raw)
         except Exception:
-            try:
-                domain_raw = ast.literal_eval(domain_raw)
-            except Exception:
-                return []
+            try: domain_raw = ast.literal_eval(domain_raw)
+            except Exception: return []
 
     if isinstance(domain_raw, list):
         cleaned = []
         for item in domain_raw:
             if isinstance(item, str):
                 try:
-                    parsed_item = json.loads(item)
-                    if isinstance(parsed_item, list):
-                        cleaned.append(parsed_item)
+                    parsed = json.loads(item)
+                    if isinstance(parsed, list): cleaned.append(parsed)
                 except Exception:
                     try:
-                        parsed_item = ast.literal_eval(item)
-                        if isinstance(parsed_item, list):
-                            cleaned.append(parsed_item)
-                    except Exception:
-                        pass
+                        parsed = ast.literal_eval(item)
+                        if isinstance(parsed, list): cleaned.append(parsed)
+                    except Exception: pass
             elif isinstance(item, list):
                 cleaned.append(item)
         return cleaned
-
     return []
 
 def resolve_partner_domain(domain, url, db, uid, password):
-    """Traduções automáticas de nomes de parceiros em IDs."""
     new_domain = []
     for clause in domain:
         if isinstance(clause, list) and len(clause) == 3:
@@ -78,8 +68,7 @@ def resolve_partner_domain(domain, url, db, uid, password):
                         target_field = "order_partner_id" if field == "order_partner_id" else "partner_id"
                         new_domain.append([target_field, "in", partner_ids])
                         continue
-                except Exception:
-                    pass
+                except Exception: pass
             if field == "partner_id.name":
                 clause[0] = "partner_id"
         new_domain.append(clause)
@@ -88,8 +77,7 @@ def resolve_partner_domain(domain, url, db, uid, password):
 @app.post("/query")
 async def query_odoo(request: Request):
     try:
-        try:
-            body = await request.json()
+        try: body = await request.json()
         except Exception:
             body_bytes = await request.body()
             body = json.loads(body_bytes.decode("utf-8").strip())
@@ -98,6 +86,7 @@ async def query_odoo(request: Request):
         raw_domain = body.get("domain") or []
         limit = int(body.get("limit", 5))
         order = body.get("order", "id desc")
+        groupby = body.get("groupby")
 
         domain = clean_domain(raw_domain)
         fields = DEFAULT_FIELDS.get(model, ["id", "display_name"])
@@ -107,65 +96,69 @@ async def query_odoo(request: Request):
         username = os.environ.get("ODOO_USERNAME")
         password = os.environ.get("ODOO_PASSWORD") or os.environ.get("ODOO_API_KEY")
 
-        if not url:
-            return JSONResponse(content={"status": "error", "message": "ODOO_URL não configurada."}, status_code=200)
-
-        if not url.startswith("http"):
-            url = "https://" + url
+        if not url or not url.startswith("http"):
+            url = "https://" + url if url else ""
 
         # Login Odoo
         auth_rpc = {
-            "jsonrpc": "2.0",
-            "method": "call",
+            "jsonrpc": "2.0", "method": "call",
             "params": {"service": "common", "method": "login", "args": [db, username, password]},
             "id": 1
         }
         res_auth = requests.post(f"{url}/jsonrpc", json=auth_rpc, timeout=10)
         uid = res_auth.json().get("result")
-        
+
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
 
-        # Trata resolução de parceiro em modelos de linhas
         if model in ["account.move.line", "sale.order.line"]:
             domain = resolve_partner_domain(domain, url, db, uid, password)
 
-        # Contagem
-        if limit == 0:
-            count_rpc = {
-                "jsonrpc": "2.0",
-                "method": "call",
+        # 1. Agrupamento / Totais Acumulados (read_group)
+        if groupby and isinstance(groupby, list):
+            group_rpc = {
+                "jsonrpc": "2.0", "method": "call",
                 "params": {
-                    "service": "object",
-                    "method": "execute_kw",
+                    "service": "object", "method": "execute_kw",
+                    "args": [db, uid, password, model, "read_group", [domain], {
+                        "fields": ["product_id", "price_subtotal:sum", "quantity:sum"],
+                        "groupby": groupby,
+                        "orderby": order or "price_subtotal desc",
+                        "limit": limit or 10
+                    }]
+                }, "id": 2
+            }
+            res_group = requests.post(f"{url}/jsonrpc", json=group_rpc, timeout=15)
+            result = res_group.json().get("result", [])
+            return JSONResponse(content={"status": "success", "data": result}, status_code=200)
+
+        # 2. Contagem (limit == 0)
+        elif limit == 0:
+            count_rpc = {
+                "jsonrpc": "2.0", "method": "call",
+                "params": {
+                    "service": "object", "method": "execute_kw",
                     "args": [db, uid, password, model, "search_count", [domain]]
-                },
-                "id": 2
+                }, "id": 2
             }
             res_count = requests.post(f"{url}/jsonrpc", json=count_rpc, timeout=15)
             count_val = res_count.json().get("result", 0)
             return JSONResponse(content={"status": "success", "count": count_val}, status_code=200)
 
-        # Leitura (search_read)
+        # 3. Leitura normal (search_read)
         else:
             read_rpc = {
-                "jsonrpc": "2.0",
-                "method": "call",
+                "jsonrpc": "2.0", "method": "call",
                 "params": {
-                    "service": "object",
-                    "method": "execute_kw",
+                    "service": "object", "method": "execute_kw",
                     "args": [db, uid, password, model, "search_read", [domain], {
-                        "fields": fields, 
-                        "limit": limit,
-                        "order": order
+                        "fields": fields, "limit": limit, "order": order
                     }]
-                },
-                "id": 2
+                }, "id": 2
             }
             res_data = requests.post(f"{url}/jsonrpc", json=read_rpc, timeout=15)
             result = res_data.json().get("result", [])
 
-            # Injeta preço líquido real calculado
             if isinstance(result, list) and model in ["account.move.line", "sale.order.line"]:
                 for line in result:
                     p_unit = line.get("price_unit", 0) or 0
