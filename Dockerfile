@@ -10,11 +10,11 @@ app = FastAPI()\n\
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])\n\
 \n\
 KNOWN_FIELDS = {\n\
-    "res.partner": ["id", "name", "email", "phone", "city"],\n\
-    "hr.employee": ["id", "name", "work_email", "work_phone", "department_id"],\n\
-    "sale.order": ["id", "name", "partner_id", "amount_total", "state", "date_order"],\n\
-    "account.move": ["id", "name", "partner_id", "amount_total", "state", "invoice_date", "move_type"],\n\
-    "product.product": ["id", "display_name", "list_price", "qty_available"]\n\
+    "res.partner": ["id", "name", "email", "phone"],\n\
+    "hr.employee": ["id", "name", "work_email", "work_phone"],\n\
+    "sale.order": ["id", "name", "amount_total", "state", "date_order"],\n\
+    "account.move": ["id", "name", "amount_total", "state", "invoice_date"],\n\
+    "product.product": ["id", "display_name", "list_price"]\n\
 }\n\
 \n\
 @app.post("/query")\n\
@@ -35,7 +35,6 @@ async def query_odoo(request: Request):\n\
     model = payload.get("model", "sale.order")\n\
     action = payload.get("action", "count")\n\
     \n\
-    # Limita e converte limit e offset com seguranca\n\
     try:\n\
         limit = int(payload.get("limit", 5))\n\
     except Exception:\n\
@@ -45,7 +44,6 @@ async def query_odoo(request: Request):\n\
     except Exception:\n\
         offset = 0\n\
         \n\
-    # Tratamento ultra-seguro do domain\n\
     raw_domain = payload.get("domain", [])\n\
     if isinstance(raw_domain, str):\n\
         try:\n\
@@ -57,23 +55,22 @@ async def query_odoo(request: Request):\n\
     else:\n\
         domain = []\n\
         \n\
-    # Selecao automatica de campos seguros\n\
     fields = payload.get("fields")\n\
     if not fields or not isinstance(fields, list):\n\
-        fields = KNOWN_FIELDS.get(model, ["id", "display_name", "name"])\n\
+        fields = KNOWN_FIELDS.get(model, ["id", "display_name"])\n\
         \n\
     try:\n\
-        # 1. Autenticacao\n\
+        # 1. Login com timeout estendido de 15s\n\
         res_auth = requests.post(f"{url}/jsonrpc", json={\n\
             "jsonrpc": "2.0", "method": "call",\n\
             "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
             "id": 1\n\
-        }, timeout=8)\n\
+        }, timeout=15)\n\
         uid = res_auth.json().get("result")\n\
         if not uid:\n\
             return {"status": "error", "message": "Falha na autenticacao do Odoo"}\n\
             \n\
-        # 2. Execucao de Count\n\
+        # 2. Count com timeout de 20s\n\
         if action == "count":\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
@@ -83,10 +80,10 @@ async def query_odoo(request: Request):\n\
                     "args": [db, uid, password, model, "search_count", [domain]]\n\
                 },\n\
                 "id": 2\n\
-            }, timeout=8)\n\
+            }, timeout=20)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
             \n\
-        # 3. Execucao de Read\n\
+        # 3. Read com timeout de 20s e campos leves\n\
         else:\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
@@ -96,7 +93,7 @@ async def query_odoo(request: Request):\n\
                     "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit, "offset": offset, "order": "id desc"}]\n\
                 },\n\
                 "id": 2\n\
-            }, timeout=8)\n\
+            }, timeout=20)\n\
             return {"status": "success", "data": res.json().get("result", [])}\n\
             \n\
     except Exception as e:\n\
