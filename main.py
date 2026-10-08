@@ -10,6 +10,7 @@ DEFAULT_FIELDS = {
     "hr.employee": ["id", "name", "work_email", "job_title", "department_id"],
     "res.partner": ["id", "name", "email", "phone", "vat", "street", "city"],
     "sale.order": ["id", "name", "partner_id", "amount_total", "state", "date_order"],
+    "sale.order.line": ["id", "order_id", "order_partner_id", "product_id", "price_unit", "product_uom_qty", "price_subtotal", "create_date"],
     "account.move": ["id", "name", "partner_id", "amount_total", "amount_residual", "state", "payment_state", "move_type", "invoice_date"],
     "product.product": ["id", "display_name", "list_price", "qty_available"],
     "product.template": ["id", "name", "list_price", "qty_available"]
@@ -24,13 +25,11 @@ async def query_odoo(request: Request):
             body_bytes = await request.body()
             body = json.loads(body_bytes.decode("utf-8").strip())
 
-        # Parâmetros
         model = body.get("model", "hr.employee")
         domain = body.get("domain") or []
         limit = int(body.get("limit", 5))
         order = body.get("order", "id desc")
 
-        # Tratamento de domain
         if isinstance(domain, str):
             try:
                 domain = json.loads(domain.replace("'", '"'))
