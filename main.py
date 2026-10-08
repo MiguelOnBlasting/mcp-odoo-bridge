@@ -34,7 +34,7 @@ def get_valid_model_fields(url, db, uid, password, model):
     return None
 
 def parse_any_payload(raw_data):
-    """Converte QUALQUER tipo de dados (dict, list, string) numa consulta estruturada."""
+    """Normaliza QUALQUER tipo de entrada (dict, list, string) numa consulta válida."""
     model = "sale.order"
     action = "read"
     domain = []
@@ -44,7 +44,7 @@ def parse_any_payload(raw_data):
     limit = 5
     offset = 0
 
-    # 1. Se vier como Dicionario JSON
+    # CASO 1: Veio como Dicionário JSON (Padrão esperado)
     if isinstance(raw_data, dict):
         model = raw_data.get("model") or model
         action = raw_data.get("action") or action
@@ -52,47 +52,60 @@ def parse_any_payload(raw_data):
         fields = raw_data.get("fields")
         agg_field = raw_data.get("agg_field") or agg_field
         groupby = raw_data.get("groupby") or []
+        
         try: limit = int(raw_data.get("limit", 5))
         except: limit = 5
         try: offset = int(raw_data.get("offset", 0))
         except: offset = 0
 
-    # 2. Se vier como Lista Posicional
+    # CASO 2: Veio como Lista Posicional (ex: ["name", "work_email"], "read", "hr.employee", 5)
     elif isinstance(raw_data, list):
         for item in raw_data:
-            if isinstance(item, str):
-                if item in ["read", "count", "aggregate"]:
+            if isinstance(item, int):
+                limit = item
+            elif isinstance(item, str):
+                if item.isdigit():
+                    limit = int(item)
+                elif item in ["read", "count", "aggregate"]:
                     action = item
                 elif "." in item:
                     model = item
                 elif item in ["amount_total", "qty_available", "price_subtotal"]:
                     agg_field = item
             elif isinstance(item, list):
+                # Se for uma lista de listas -> Domain ex: [["is_company", "=", True]]
                 if item and isinstance(item[0], list):
                     domain = item
+                # Se for uma lista de strings -> Fields ex: ["name", "email"]
                 elif item and isinstance(item[0], str):
                     fields = item
 
-    # 3. Se vier como String Bruta
+    # CASO 3: Veio como String Bruta / Texto sem estrutura
     elif isinstance(raw_data, str):
         str_val = raw_data.strip()
-        if "hr.employee" in str_val: model = "hr.employee"
-        elif "res.partner" in str_val: model = "res.partner"
-        elif "account.move" in str_val: model = "account.move"
-        elif "product.product" in str_val: model = "product.product"
         
+        # Extrai números isolados para o limite
+        numbers = re.findall(r'\b\d+\b', str_val)
+        if numbers:
+            limit = int(numbers[0])
+
+        # Deteta modelos conhecidos no texto
+        for known_model in ["hr.employee", "res.partner", "account.move", "product.product", "sale.order"]:
+            if known_model in str_val:
+                model = known_model
+                break
+
         if "count" in str_val: action = "count"
         elif "aggregate" in str_val: action = "aggregate"
         else: action = "read"
 
-    # Se domain for string, tenta JSON
+    # SANITIZAÇÃO EXTRA: Se domain ou fields vierem como string (ex: "['name', 'email']"), converte para lista
     if isinstance(domain, str):
-        try: domain = json.loads(domain)
+        try: domain = json.loads(domain.replace("'", '"'))
         except: domain = []
 
-    # Se fields for string, tenta JSON
     if isinstance(fields, str):
-        try: fields = json.loads(fields)
+        try: fields = json.loads(fields.replace("'", '"'))
         except: fields = None
 
     return model, action, domain, fields, agg_field, groupby, limit, offset
