@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Campos padrão de segurança por modelo
 DEFAULT_FIELDS = {
     "hr.employee": ["id", "name", "work_email", "job_title"],
     "res.partner": ["id", "name", "email", "phone"],
@@ -19,19 +18,26 @@ async def query_odoo(request: Request):
     try:
         body = await request.json()
         
-        # Extrai os parâmetros básicos
+        # Extrai os parâmetros
         model = body.get("model", "hr.employee")
         fields = body.get("fields") or DEFAULT_FIELDS.get(model, ["id", "display_name"])
+        domain = body.get("domain") or []
         limit = int(body.get("limit", 5))
 
-        # Variáveis de ambiente
+        # Garantir que domain é uma lista
+        if isinstance(domain, str):
+            try:
+                domain = json.loads(domain.replace("'", '"'))
+            except Exception:
+                domain = []
+
         url = os.environ.get("ODOO_URL", "").rstrip("/")
         db = os.environ.get("ODOO_DB")
         username = os.environ.get("ODOO_USERNAME")
         password = os.environ.get("ODOO_PASSWORD") or os.environ.get("ODOO_API_KEY")
 
         if not url:
-            return JSONResponse(content={"status": "error", "message": "ODOO_URL não configurada."}, status_code=200)
+            return JSONResponse(content={"status": "error", "message": "ODOO_URL nao configurada."}, status_code=200)
 
         if not url.startswith("http"):
             url = "https://" + url
@@ -49,14 +55,14 @@ async def query_odoo(request: Request):
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
 
-        # 2. Leitura dos dados (search_read)
+        # 2. Leitura com Filtro (domain)
         read_rpc = {
             "jsonrpc": "2.0",
             "method": "call",
             "params": {
                 "service": "object",
                 "method": "execute_kw",
-                "args": [db, uid, password, model, "search_read", [[]], {"fields": fields, "limit": limit}]
+                "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit}]
             },
             "id": 2
         }
