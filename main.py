@@ -144,7 +144,7 @@ async def query_odoo(request: Request):
         except Exception as ae:
             return JSONResponse(content={"status": "error", "message": f"Falha ligacao Odoo: {str(ae)}"}, status_code=200)
 
-        # 2. Filtragem e validacao 100% dinamica de campos com Odoo ORM
+        # 2. Filtragem e validacao dinamica de campos com Odoo ORM
         valid_odoo_fields = get_valid_model_fields(url, db, uid, password, model)
         
         if raw_fields and isinstance(raw_fields, list):
@@ -161,29 +161,56 @@ async def query_odoo(request: Request):
             fields = KNOWN_FIELDS.get(model, ["id", "display_name"])
 
         # 3. Execucao das chamadas
-        if action == "aggregate":
-            res = requests.post(f"{url}/jsonrpc", json={
-                "jsonrpc": "2.0", "method": "call",
-                "params": {
-                    "service": "object",
-                    "method": "execute_kw",
-                    "args": [db, uid, password, model, "read_group", [domain], [agg_field], groupby]
-                },
-                "id": 2
-            }, timeout=20)
-            res_json = res.json()
-            if "error" in res_json:
-                err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
-                return JSONResponse(content={"status": "error", "message": f"Erro read_group ({model}): {err_details}"}, status_code=200)
-            return JSONResponse(content={"status": "success", "result": res_json.get("result", [])}, status_code=200)
+        try:
+            if action == "aggregate":
+                res = requests.post(f"{url}/jsonrpc", json={
+                    "jsonrpc": "2.0", "method": "call",
+                    "params": {
+                        "service": "object",
+                        "method": "execute_kw",
+                        "args": [db, uid, password, model, "read_group", [domain], [agg_field], groupby]
+                    },
+                    "id": 2
+                }, timeout=20)
+                res_json = res.json()
+                if "error" in res_json:
+                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
+                    return JSONResponse(content={"status": "error", "message": f"Erro read_group ({model}): {err_details}"}, status_code=200)
+                return JSONResponse(content={"status": "success", "result": res_json.get("result", [])}, status_code=200)
 
-        elif action == "count":
-            res = requests.post(f"{url}/jsonrpc", json={
-                "jsonrpc": "2.0", "method": "call",
-                "params": {
-                    "service": "object",
-                    "method": "execute_kw",
-                    "args": [db, uid, password, model, "search_count", [domain]]
-                },
-                "id": 2
-            }, timeout=20)
+            elif action == "count":
+                res = requests.post(f"{url}/jsonrpc", json={
+                    "jsonrpc": "2.0", "method": "call",
+                    "params": {
+                        "service": "object",
+                        "method": "execute_kw",
+                        "args": [db, uid, password, model, "search_count", [domain]]
+                    },
+                    "id": 2
+                }, timeout=20)
+                res_json = res.json()
+                if "error" in res_json:
+                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
+                    return JSONResponse(content={"status": "error", "message": f"Erro search_count ({model}): {err_details}"}, status_code=200)
+                return JSONResponse(content={"status": "success", "count": res_json.get("result", 0)}, status_code=200)
+
+            else:
+                res = requests.post(f"{url}/jsonrpc", json={
+                    "jsonrpc": "2.0", "method": "call",
+                    "params": {
+                        "service": "object",
+                        "method": "execute_kw",
+                        "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit, "offset": offset, "order": "id desc"}]
+                    },
+                    "id": 2
+                }, timeout=20)
+                res_json = res.json()
+                if "error" in res_json:
+                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
+                    return JSONResponse(content={"status": "error", "message": f"Erro search_read ({model}): {err_details}"}, status_code=200)
+                return JSONResponse(content={"status": "success", "data": res_json.get("result", [])}, status_code=200)
+        except Exception as oe:
+            return JSONResponse(content={"status": "error", "message": f"Erro na execucao Odoo: {str(oe)}"}, status_code=200)
+
+    except Exception as ge:
+        return JSONResponse(content={"status": "error", "message": f"Excecao servidor: {str(ge)}"}, status_code=200)
