@@ -13,44 +13,6 @@ DEFAULT_FIELDS = {
     "product.product": ["id", "display_name", "list_price", "qty_available"]
 }
 
-def parse_payload(body):
-    """Extrai model, domain, fields, limit e action de QUALQUER formato de entrada."""
-    model = "hr.employee"
-    action = "read"
-    domain = []
-    fields = None
-    limit = 5
-
-    # Caso 1: Dicionário JSON tradicional
-    if isinstance(body, dict):
-        model = body.get("model") or model
-        action = body.get("action") or action
-        domain = body.get("domain") or []
-        fields = body.get("fields")
-        try: limit = int(body.get("limit", 5))
-        except: limit = 5
-
-    # Caso 2: Lista posicional enviada pelo TypingMind (ex: ["hr.employee", "count"])
-    elif isinstance(body, list):
-        for item in body:
-            if isinstance(item, int):
-                limit = item
-            elif isinstance(item, str):
-                if item in ["read", "count"]:
-                    action = item
-                elif "." in item:
-                    model = item
-            elif isinstance(item, list):
-                if item and isinstance(item[0], list):
-                    domain = item
-                elif item and isinstance(item[0], str):
-                    fields = item
-
-    if not fields:
-        fields = DEFAULT_FIELDS.get(model, ["id", "display_name"])
-
-    return model, action, domain, fields, limit
-
 @app.post("/query")
 async def query_odoo(request: Request):
     try:
@@ -58,9 +20,21 @@ async def query_odoo(request: Request):
             body = await request.json()
         except Exception:
             body_bytes = await request.body()
-            body = body_bytes.decode("utf-8").strip()
+            body = json.loads(body_bytes.decode("utf-8").strip())
 
-        model, action, domain, fields, limit = parse_payload(body)
+        # Parâmetros estáveis
+        model = body.get("model", "hr.employee")
+        domain = body.get("domain") or []
+        limit = int(body.get("limit", 5))
+
+        # Garantir que domain é lista
+        if isinstance(domain, str):
+            try:
+                domain = json.loads(domain.replace("'", '"'))
+            except Exception:
+                domain = []
+
+        fields = DEFAULT_FIELDS.get(model, ["id", "display_name"])
 
         url = os.environ.get("ODOO_URL", "").rstrip("/")
         db = os.environ.get("ODOO_DB")
@@ -68,12 +42,12 @@ async def query_odoo(request: Request):
         password = os.environ.get("ODOO_PASSWORD") or os.environ.get("ODOO_API_KEY")
 
         if not url:
-            return JSONResponse(content={"status": "error", "message": "ODOO_URL nao configurada."}, status_code=200)
+            return JSONResponse(content={"status": "error", "message": "ODOO_URL não configurada."}, status_code=200)
 
         if not url.startswith("http"):
             url = "https://" + url
 
-        # Login Odoo
+        # 1. Login no Odoo
         auth_rpc = {
             "jsonrpc": "2.0",
             "method": "call",
@@ -86,8 +60,8 @@ async def query_odoo(request: Request):
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
 
-        # Executa Contagem ou Leitura
-        if action == "count":
+        # 2. Se limit == 0, faz CONTAGEM (search_count)
+        if limit == 0:
             count_rpc = {
                 "jsonrpc": "2.0",
                 "method": "call",
@@ -101,6 +75,8 @@ async def query_odoo(request: Request):
             res_count = requests.post(f"{url}/jsonrpc", json=count_rpc, timeout=15)
             count_val = res_count.json().get("result", 0)
             return JSONResponse(content={"status": "success", "count": count_val}, status_code=200)
+
+        # 3. Se limit > 0, faz LEITURA (search_read)
         else:
             read_rpc = {
                 "jsonrpc": "2.0",
