@@ -34,7 +34,7 @@ def get_valid_model_fields(url, db, uid, password, model):
     return None
 
 def parse_any_payload(raw_data):
-    """Normaliza QUALQUER tipo de entrada (dict, list, string) numa consulta válida."""
+    """Normaliza QUALQUER tipo de entrada (dict, list, string) numa consulta valida."""
     model = "sale.order"
     action = "read"
     domain = []
@@ -44,7 +44,7 @@ def parse_any_payload(raw_data):
     limit = 5
     offset = 0
 
-    # CASO 1: Veio como Dicionário JSON (Padrão esperado)
+    # 1. Se vier como Dicionario JSON (Formato ideal)
     if isinstance(raw_data, dict):
         model = raw_data.get("model") or model
         action = raw_data.get("action") or action
@@ -52,13 +52,12 @@ def parse_any_payload(raw_data):
         fields = raw_data.get("fields")
         agg_field = raw_data.get("agg_field") or agg_field
         groupby = raw_data.get("groupby") or []
-        
         try: limit = int(raw_data.get("limit", 5))
         except: limit = 5
         try: offset = int(raw_data.get("offset", 0))
         except: offset = 0
 
-    # CASO 2: Veio como Lista Posicional (ex: ["name", "work_email"], "read", "hr.employee", 5)
+    # 2. Se vier como Lista Posicional (Qualquer ordem)
     elif isinstance(raw_data, list):
         for item in raw_data:
             if isinstance(item, int):
@@ -73,23 +72,18 @@ def parse_any_payload(raw_data):
                 elif item in ["amount_total", "qty_available", "price_subtotal"]:
                     agg_field = item
             elif isinstance(item, list):
-                # Se for uma lista de listas -> Domain ex: [["is_company", "=", True]]
                 if item and isinstance(item[0], list):
                     domain = item
-                # Se for uma lista de strings -> Fields ex: ["name", "email"]
                 elif item and isinstance(item[0], str):
                     fields = item
 
-    # CASO 3: Veio como String Bruta / Texto sem estrutura
+    # 3. Se vem como String
     elif isinstance(raw_data, str):
         str_val = raw_data.strip()
-        
-        # Extrai números isolados para o limite
         numbers = re.findall(r'\b\d+\b', str_val)
         if numbers:
             limit = int(numbers[0])
 
-        # Deteta modelos conhecidos no texto
         for known_model in ["hr.employee", "res.partner", "account.move", "product.product", "sale.order"]:
             if known_model in str_val:
                 model = known_model
@@ -99,7 +93,7 @@ def parse_any_payload(raw_data):
         elif "aggregate" in str_val: action = "aggregate"
         else: action = "read"
 
-    # SANITIZAÇÃO EXTRA: Se domain ou fields vierem como string (ex: "['name', 'email']"), converte para lista
+    # Trata parsing de strings serializadas dentro do JSON
     if isinstance(domain, str):
         try: domain = json.loads(domain.replace("'", '"'))
         except: domain = []
