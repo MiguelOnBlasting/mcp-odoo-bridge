@@ -18,6 +18,19 @@ KNOWN_FIELDS = {\n\
     "product.product": ["id", "display_name", "list_price", "qty_available"]\n\
 }\n\
 \n\
+def safe_parse_json(val):\n\
+    if not val or not isinstance(val, str):\n\
+        return val if isinstance(val, (list, dict)) else None\n\
+    clean = val.strip()\n\
+    if not clean or clean.startswith("{") and clean.endswith("}") and ":" not in clean:\n\
+        return None\n\
+    # Converte aspas simples para aspas duplas caso o LLM envie [["email", "ilike", "%.pt"]]\n\
+    clean_json = clean.replace("\'", "\"")\n\
+    try:\n\
+        return json.loads(clean_json)\n\
+    except Exception:\n\
+        return None\n\
+\n\
 @app.post("/query")\n\
 async def query_odoo(request: Request):\n\
     try:\n\
@@ -49,21 +62,13 @@ async def query_odoo(request: Request):\n\
         except Exception:\n\
             offset = 0\n\
             \n\
-        # Tratar domain de forma ultra flexivel\n\
-        raw_domain = payload.get("domain", [])\n\
-        if isinstance(raw_domain, str):\n\
-            raw_domain_clean = raw_domain.strip()\n\
-            if raw_domain_clean and raw_domain_clean != "{domain}":\n\
-                try:\n\
-                    domain = json.loads(raw_domain_clean)\n\
-                except Exception as de:\n\
-                    return JSONResponse(content={"status": "error", "message": f"Sintaxe invalida no domain ({raw_domain_clean}): {str(de)}"}, status_code=200)\n\
-            else:\n\
-                domain = []\n\
-        elif isinstance(raw_domain, list):\n\
-            domain = raw_domain\n\
-        else:\n\
-            domain = []\n\
+        # Parsing seguro dos campos estruturados\n\
+        domain = safe_parse_json(payload.get("domain")) or []\n\
+        fields = safe_parse_json(payload.get("fields"))\n\
+        groupby = safe_parse_json(payload.get("groupby")) or []\n\
+        \n\
+        if not fields or not isinstance(fields, list):\n\
+            fields = KNOWN_FIELDS.get(model, ["id", "display_name"])\n\
             \n\
         # 1. Login no Odoo\n\
         try:\n\
@@ -85,15 +90,6 @@ async def query_odoo(request: Request):\n\
         # 2. Execucao de chamadas (Aggregate, Count, Read)\n\
         if action == "aggregate":\n\
             agg_field = payload.get("agg_field", "amount_total")\n\
-            groupby = payload.get("groupby", [])\n\
-            if isinstance(groupby, str) and groupby.strip() and groupby != "{groupby}":\n\
-                try:\n\
-                    groupby = json.loads(groupby)\n\
-                except Exception:\n\
-                    groupby = [groupby]\n\
-            elif not isinstance(groupby, list):\n\
-                groupby = []\n\
-                \n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
                 "params": {\n\
@@ -107,7 +103,7 @@ async def query_odoo(request: Request):\n\
             res_json = res.json()\n\
             if "error" in res_json:\n\
                 err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")\n\
-                return JSONResponse(content={"status": "error", "message": f"Erro no read_group ({model}): {err_details}"}, status_code=200)\n\
+                return JSONResponse(content={"status": "error", "message": f"Erro Odoo no read_group ({model}): {err_details}"}, status_code=200)\n\
             return JSONResponse(content={"status": "success", "result": res_json.get("result", [])}, status_code=200)\n\
             \n\
         elif action == "count":\n\
@@ -124,19 +120,10 @@ async def query_odoo(request: Request):\n\
             res_json = res.json()\n\
             if "error" in res_json:\n\
                 err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")\n\
-                return JSONResponse(content={"status": "error", "message": f"Erro no search_count ({model}): {err_details}"}, status_code=200)\n\
+                return JSONResponse(content={"status": "error", "message": f"Erro Odoo no search_count ({model}): {err_details}"}, status_code=200)\n\
             return JSONResponse(content={"status": "success", "count": res_json.get("result", 0)}, status_code=200)\n\
             \n\
         else:\n\
-            fields = payload.get("fields")\n\
-            if isinstance(fields, str) and fields.strip() and fields != "{fields}":\n\
-                try:\n\
-                    fields = json.loads(fields)\n\
-                except Exception:\n\
-                    fields = None\n\
-            if not fields or not isinstance(fields, list):\n\
-                fields = KNOWN_FIELDS.get(model, ["id", "display_name"])\n\
-                \n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
                 "params": {\n\
