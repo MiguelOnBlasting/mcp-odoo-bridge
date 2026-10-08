@@ -2,8 +2,9 @@ FROM python:3.11-slim
 
 RUN pip install --no-cache-dir fastapi uvicorn requests
 
-RUN echo 'import os, requests, json\n\
+RUN echo 'import os, requests, json, traceback\n\
 from fastapi import FastAPI, Request\n\
+from fastapi.responses import JSONResponse\n\
 from fastapi.middleware.cors import CORSMiddleware\n\
 \n\
 app = FastAPI()\n\
@@ -20,58 +21,68 @@ KNOWN_FIELDS = {\n\
 @app.post("/query")\n\
 async def query_odoo(request: Request):\n\
     try:\n\
-        payload = await request.json()\n\
-    except Exception:\n\
-        payload = {}\n\
+        try:\n\
+            payload = await request.json()\n\
+        except Exception as pe:\n\
+            return JSONResponse(content={"status": "error", "message": f"Erro de parsing JSON no Payload: {str(pe)}"}, status_code=200)\n\
+            \n\
+        url = os.environ.get("ODOO_URL", "").rstrip("/")\n\
+        db = os.environ.get("ODOO_DB")\n\
+        username = os.environ.get("ODOO_USERNAME")\n\
+        password = os.environ.get("ODOO_PASSWORD") or os.environ.get("ODOO_API_KEY")\n\
         \n\
-    url = os.environ.get("ODOO_URL", "").rstrip("/")\n\
-    db = os.environ.get("ODOO_DB")\n\
-    username = os.environ.get("ODOO_USERNAME")\n\
-    password = os.environ.get("ODOO_PASSWORD") or os.environ.get("ODOO_API_KEY")\n\
-    \n\
-    if not url.startswith("http"):\n\
-        url = "https://" + url\n\
+        if not url:\n\
+            return JSONResponse(content={"status": "error", "message": "Variavel ODOO_URL nao configurada no Render."}, status_code=200)\n\
+            \n\
+        if not url.startswith("http"):\n\
+            url = "https://" + url\n\
+            \n\
+        model = payload.get("model", "sale.order")\n\
+        action = payload.get("action", "read")\n\
         \n\
-    model = payload.get("model", "sale.order")\n\
-    action = payload.get("action", "read")\n\
-    \n\
-    try:\n\
-        limit = int(payload.get("limit", 5))\n\
-    except Exception:\n\
-        limit = 5\n\
-    try:\n\
-        offset = int(payload.get("offset", 0))\n\
-    except Exception:\n\
-        offset = 0\n\
-        \n\
-    # Sanitizacao robusta do domain para aceitar ilike / like\n\
-    raw_domain = payload.get("domain", [])\n\
-    if isinstance(raw_domain, str):\n\
-        raw_domain_clean = raw_domain.strip()\n\
-        if raw_domain_clean and raw_domain_clean != "{domain}":\n\
-            try:\n\
-                domain = json.loads(raw_domain_clean)\n\
-            except Exception:\n\
+        try:\n\
+            limit = int(payload.get("limit", 5))\n\
+        except Exception:\n\
+            limit = 5\n\
+        try:\n\
+            offset = int(payload.get("offset", 0))\n\
+        except Exception:\n\
+            offset = 0\n\
+            \n\
+        # Tratar domain de forma ultra flexivel\n\
+        raw_domain = payload.get("domain", [])\n\
+        if isinstance(raw_domain, str):\n\
+            raw_domain_clean = raw_domain.strip()\n\
+            if raw_domain_clean and raw_domain_clean != "{domain}":\n\
+                try:\n\
+                    domain = json.loads(raw_domain_clean)\n\
+                except Exception as de:\n\
+                    return JSONResponse(content={"status": "error", "message": f"Sintaxe invalida no domain ({raw_domain_clean}): {str(de)}"}, status_code=200)\n\
+            else:\n\
                 domain = []\n\
+        elif isinstance(raw_domain, list):\n\
+            domain = raw_domain\n\
         else:\n\
             domain = []\n\
-    elif isinstance(raw_domain, list):\n\
-        domain = raw_domain\n\
-    else:\n\
-        domain = []\n\
-        \n\
-    try:\n\
-        # 1. Login\n\
-        res_auth = requests.post(f"{url}/jsonrpc", json={\n\
-            "jsonrpc": "2.0", "method": "call",\n\
-            "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
-            "id": 1\n\
-        }, timeout=15)\n\
-        uid = res_auth.json().get("result")\n\
-        if not uid:\n\
-            return {"status": "error", "message": "Falha na autenticacao do Odoo"}\n\
             \n\
-        # 2. Action: AGGREGATE\n\
+        # 1. Login no Odoo\n\
+        try:\n\
+            res_auth = requests.post(f"{url}/jsonrpc", json={\n\
+                "jsonrpc": "2.0", "method": "call",\n\
+                "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
+                "id": 1\n\
+            }, timeout=15)\n\
+            auth_data = res_auth.json()\n\
+            if "error" in auth_data:\n\
+                err_msg = auth_data["error"].get("data", {}).get("message") or auth_data["error"].get("message")\n\
+                return JSONResponse(content={"status": "error", "message": f"Erro de Login no Odoo: {err_msg}"}, status_code=200)\n\
+            uid = auth_data.get("result")\n\
+            if not uid:\n\
+                return JSONResponse(content={"status": "error", "message": "Autenticacao recusada: Credenciais invalidas no Odoo."}, status_code=200)\n\
+        except Exception as ae:\n\
+            return JSONResponse(content={"status": "error", "message": f"Falha ao ligar ao Odoo (Login Timeout/URL): {str(ae)}"}, status_code=200)\n\
+            \n\
+        # 2. Execucao de chamadas (Aggregate, Count, Read)\n\
         if action == "aggregate":\n\
             agg_field = payload.get("agg_field", "amount_total")\n\
             groupby = payload.get("groupby", [])\n\
@@ -92,9 +103,13 @@ async def query_odoo(request: Request):\n\
                 },\n\
                 "id": 2\n\
             }, timeout=20)\n\
-            return {"status": "success", "result": res.json().get("result", [])}\n\
             \n\
-        # 3. Action: COUNT\n\
+            res_json = res.json()\n\
+            if "error" in res_json:\n\
+                err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")\n\
+                return JSONResponse(content={"status": "error", "message": f"Erro no read_group ({model}): {err_details}"}, status_code=200)\n\
+            return JSONResponse(content={"status": "success", "result": res_json.get("result", [])}, status_code=200)\n\
+            \n\
         elif action == "count":\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
@@ -105,9 +120,13 @@ async def query_odoo(request: Request):\n\
                 },\n\
                 "id": 2\n\
             }, timeout=20)\n\
-            return {"status": "success", "count": res.json().get("result", 0)}\n\
             \n\
-        # 4. Action: READ\n\
+            res_json = res.json()\n\
+            if "error" in res_json:\n\
+                err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")\n\
+                return JSONResponse(content={"status": "error", "message": f"Erro no search_count ({model}): {err_details}"}, status_code=200)\n\
+            return JSONResponse(content={"status": "success", "count": res_json.get("result", 0)}, status_code=200)\n\
+            \n\
         else:\n\
             fields = payload.get("fields")\n\
             if isinstance(fields, str) and fields.strip() and fields != "{fields}":\n\
@@ -127,10 +146,15 @@ async def query_odoo(request: Request):\n\
                 },\n\
                 "id": 2\n\
             }, timeout=20)\n\
-            return {"status": "success", "data": res.json().get("result", [])}\n\
             \n\
-    except Exception as e:\n\
-        return {"status": "error", "message": str(e)}\n\
+            res_json = res.json()\n\
+            if "error" in res_json:\n\
+                err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")\n\
+                return JSONResponse(content={"status": "error", "message": f"Erro Odoo no search_read ({model}): {err_details}"}, status_code=200)\n\
+            return JSONResponse(content={"status": "success", "data": res_json.get("result", [])}, status_code=200)\n\
+            \n\
+    except Exception as ge:\n\
+        return JSONResponse(content={"status": "error", "message": f"Excecao no servidor Bridge: {str(ge)}"}, status_code=200)\n\
 ' > main.py
 
 EXPOSE 10000
