@@ -15,6 +15,10 @@ DEFAULT_FIELDS = {
         "price_unit", "discount", "price_reduce", "product_uom_qty", "price_subtotal", "create_date"
     ],
     "account.move": ["id", "name", "partner_id", "amount_total", "amount_residual", "state", "payment_state", "move_type", "invoice_date"],
+    "account.move.line": [
+        "id", "move_id", "partner_id", "product_id", 
+        "price_unit", "discount", "quantity", "price_subtotal", "date"
+    ],
     "product.product": ["id", "display_name", "list_price", "qty_available"],
     "product.template": ["id", "name", "list_price", "qty_available"]
 }
