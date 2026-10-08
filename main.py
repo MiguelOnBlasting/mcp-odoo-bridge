@@ -24,7 +24,7 @@ DEFAULT_FIELDS = {
 }
 
 def clean_domain(domain_raw):
-    """Garante que o domain e retornado como uma lista de filtros Python valida."""
+    """Normaliza e limpa a lista de filtros domain."""
     if not domain_raw:
         return []
     
@@ -57,6 +57,36 @@ def clean_domain(domain_raw):
         return cleaned
 
     return []
+
+def resolve_partner_domain(domain, url, db, uid, password):
+    """Traduções automáticas de nomes de parceiros em IDs caso o Odoo exija IDs diretos."""
+    new_domain = []
+    for clause in domain:
+        if isinstance(clause, list) and len(clause) == 3:
+            field, op, val = clause[0], clause[1], clause[2]
+            # Se for filtro por partner_id com texto em ilike
+            if field in ["partner_id", "order_partner_id", "partner_id.name"] and op in ["ilike", "="] and isinstance(val, str):
+                try:
+                    # Procura os IDs dos parceiros correspondentes ao nome
+                    res = requests.post(f"{url}/jsonrpc", json={
+                        "jsonrpc": "2.0", "method": "call",
+                        "params": {
+                            "service": "object", "method": "execute_kw",
+                            "args": [db, uid, password, "res.partner", "search_read", [[["name", "ilike", val]]], {"fields": ["id"], "limit": 10}]
+                        }, "id": 99
+                    }, timeout=5)
+                    partner_ids = [p["id"] for p in res.json().get("result", [])]
+                    if partner_ids:
+                        target_field = "order_partner_id" if field == "order_partner_id" else "partner_id"
+                        new_domain.append([target_field, "in", partner_ids])
+                        continue
+                except Exception:
+                    pass
+            # Corrige parceiro_id.name para partner_id
+            if field == "partner_id.name":
+                clause[0] = "partner_id"
+        new_domain.append(clause)
+    return new_domain
 
 @app.post("/query")
 async def query_odoo(request: Request):
@@ -98,6 +128,10 @@ async def query_odoo(request: Request):
         
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
+
+        # Trata resolução automática de clientes para modelos de linhas
+        if model in ["account.move.line", "sale.order.line"]:
+            domain = resolve_partner_domain(domain, url, db, uid, password)
 
         # 2. Contagem (se limit == 0)
         if limit == 0:
