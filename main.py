@@ -17,15 +17,17 @@ KNOWN_FIELDS = {
 def get_valid_model_fields(url, db, uid, password, model):
     """Consulta o Odoo via fields_get para descobrir os campos reais da tabela."""
     try:
-        res = requests.post(f"{url}/jsonrpc", json={
-            "jsonrpc": "2.0", "method": "call",
+        payload_rpc = {
+            "jsonrpc": "2.0",
+            "method": "call",
             "params": {
                 "service": "object",
                 "method": "execute_kw",
                 "args": [db, uid, password, model, "fields_get", [], {"attributes": ["string", "type"]}]
             },
             "id": 99
-        }, timeout=5)
+        }
+        res = requests.post(f"{url}/jsonrpc", json=payload_rpc, timeout=5)
         res_json = res.json()
         if "result" in res_json and isinstance(res_json["result"], dict):
             return set(res_json["result"].keys())
@@ -52,10 +54,14 @@ def parse_any_payload(raw_data):
         fields = raw_data.get("fields")
         agg_field = raw_data.get("agg_field") or agg_field
         groupby = raw_data.get("groupby") or []
-        try: limit = int(raw_data.get("limit", 5))
-        except: limit = 5
-        try: offset = int(raw_data.get("offset", 0))
-        except: offset = 0
+        try:
+            limit = int(raw_data.get("limit", 5))
+        except Exception:
+            limit = 5
+        try:
+            offset = int(raw_data.get("offset", 0))
+        except Exception:
+            offset = 0
 
     # 2. Se vier como Lista Posicional
     elif isinstance(raw_data, list):
@@ -77,7 +83,7 @@ def parse_any_payload(raw_data):
                 elif item and isinstance(item[0], str):
                     fields = item
 
-    # 3. Se vem como String
+    # 3. Se vier como String Bruta
     elif isinstance(raw_data, str):
         str_val = raw_data.strip()
         numbers = re.findall(r'\b\d+\b', str_val)
@@ -89,18 +95,25 @@ def parse_any_payload(raw_data):
                 model = known_model
                 break
 
-        if "count" in str_val: action = "count"
-        elif "aggregate" in str_val: action = "aggregate"
-        else: action = "read"
+        if "count" in str_val:
+            action = "count"
+        elif "aggregate" in str_val:
+            action = "aggregate"
+        else:
+            action = "read"
 
     # Trata parsing de strings serializadas dentro do JSON
     if isinstance(domain, str):
-        try: domain = json.loads(domain.replace("'", '"'))
-        except: domain = []
+        try:
+            domain = json.loads(domain.replace("'", '"'))
+        except Exception:
+            domain = []
 
     if isinstance(fields, str):
-        try: fields = json.loads(fields.replace("'", '"'))
-        except: fields = None
+        try:
+            fields = json.loads(fields.replace("'", '"'))
+        except Exception:
+            fields = None
 
     return model, action, domain, fields, agg_field, groupby, limit, offset
 
@@ -140,11 +153,17 @@ async def query_odoo(request: Request):
 
         # 1. Login no Odoo
         try:
-            res_auth = requests.post(f"{url}/jsonrpc", json={
-                "jsonrpc": "2.0", "method": "call",
-                "params": {"service": "common", "method": "login", "args": [db, username, password]},
+            login_rpc = {
+                "jsonrpc": "2.0",
+                "method": "call",
+                "params": {
+                    "service": "common",
+                    "method": "login",
+                    "args": [db, username, password]
+                },
                 "id": 1
-            }, timeout=15)
+            }
+            res_auth = requests.post(f"{url}/jsonrpc", json=login_rpc, timeout=15)
             auth_data = res_auth.json()
             if "error" in auth_data:
                 err_msg = auth_data["error"].get("data", {}).get("message") or auth_data["error"].get("message")
@@ -174,15 +193,17 @@ async def query_odoo(request: Request):
         # 3. Execucao das chamadas Odoo
         try:
             if action == "aggregate":
-                res = requests.post(f"{url}/jsonrpc", json={
-                    "jsonrpc": "2.0", "method": "call",
+                agg_rpc = {
+                    "jsonrpc": "2.0",
+                    "method": "call",
                     "params": {
                         "service": "object",
                         "method": "execute_kw",
                         "args": [db, uid, password, model, "read_group", [domain], [agg_field], groupby]
                     },
                     "id": 2
-                }, timeout=20)
+                }
+                res = requests.post(f"{url}/jsonrpc", json=agg_rpc, timeout=20)
                 res_json = res.json()
                 if "error" in res_json:
                     err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
@@ -190,7 +211,48 @@ async def query_odoo(request: Request):
                 return JSONResponse(content={"status": "success", "result": res_json.get("result", [])}, status_code=200)
 
             elif action == "count":
-                res = requests.post(f"{url}/jsonrpc", json={
-                    "jsonrpc": "2.0", "method": "call",
+                count_rpc = {
+                    "jsonrpc": "2.0",
+                    "method": "call",
                     "params": {
-                        "service": "
+                        "service": "object",
+                        "method": "execute_kw",
+                        "args": [db, uid, password, model, "search_count", [domain]]
+                    },
+                    "id": 2
+                }
+                res = requests.post(f"{url}/jsonrpc", json=count_rpc, timeout=20)
+                res_json = res.json()
+                if "error" in res_json:
+                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
+                    return JSONResponse(content={"status": "error", "message": f"Erro search_count ({model}): {err_details}"}, status_code=200)
+                return JSONResponse(content={"status": "success", "count": res_json.get("result", 0)}, status_code=200)
+
+            else:
+                read_params = {
+                    "fields": fields,
+                    "limit": limit,
+                    "offset": offset,
+                    "order": "id desc"
+                }
+                search_rpc = {
+                    "jsonrpc": "2.0",
+                    "method": "call",
+                    "params": {
+                        "service": "object",
+                        "method": "execute_kw",
+                        "args": [db, uid, password, model, "search_read", [domain], read_params]
+                    },
+                    "id": 2
+                }
+                res = requests.post(f"{url}/jsonrpc", json=search_rpc, timeout=20)
+                res_json = res.json()
+                if "error" in res_json:
+                    err_details = res_json["error"].get("data", {}).get("message") or res_json["error"].get("message")
+                    return JSONResponse(content={"status": "error", "message": f"Erro search_read ({model}): {err_details}"}, status_code=200)
+                return JSONResponse(content={"status": "success", "data": res_json.get("result", [])}, status_code=200)
+        except Exception as oe:
+            return JSONResponse(content={"status": "error", "message": f"Erro na execucao Odoo: {str(oe)}"}, status_code=200)
+
+    except Exception as ge:
+        return JSONResponse(content={"status": "error", "message": f"Excecao servidor: {str(ge)}"}, status_code=200)
