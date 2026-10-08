@@ -10,11 +10,11 @@ app = FastAPI()\n\
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])\n\
 \n\
 KNOWN_FIELDS = {\n\
-    "res.partner": ["id", "name", "email", "phone"],\n\
-    "hr.employee": ["id", "name", "work_email", "work_phone"],\n\
-    "sale.order": ["id", "name", "amount_total", "state", "date_order"],\n\
-    "account.move": ["id", "name", "amount_total", "state", "invoice_date"],\n\
-    "product.product": ["id", "display_name", "list_price"]\n\
+    "res.partner": ["id", "name", "email", "phone", "city"],\n\
+    "hr.employee": ["id", "name", "work_email", "work_phone", "department_id"],\n\
+    "sale.order": ["id", "name", "partner_id", "amount_total", "state", "date_order"],\n\
+    "account.move": ["id", "name", "partner_id", "amount_total", "state", "invoice_date", "move_type"],\n\
+    "product.product": ["id", "display_name", "list_price", "qty_available"]\n\
 }\n\
 \n\
 @app.post("/query")\n\
@@ -33,7 +33,7 @@ async def query_odoo(request: Request):\n\
         url = "https://" + url\n\
         \n\
     model = payload.get("model", "sale.order")\n\
-    action = payload.get("action", "count")\n\
+    action = payload.get("action", "read")\n\
     \n\
     try:\n\
         limit = int(payload.get("limit", 5))\n\
@@ -44,6 +44,7 @@ async def query_odoo(request: Request):\n\
     except Exception:\n\
         offset = 0\n\
         \n\
+    # Normalizacao segura do domain\n\
     raw_domain = payload.get("domain", [])\n\
     if isinstance(raw_domain, str):\n\
         try:\n\
@@ -55,12 +56,8 @@ async def query_odoo(request: Request):\n\
     else:\n\
         domain = []\n\
         \n\
-    fields = payload.get("fields")\n\
-    if not fields or not isinstance(fields, list):\n\
-        fields = KNOWN_FIELDS.get(model, ["id", "display_name"])\n\
-        \n\
     try:\n\
-        # 1. Login com timeout estendido de 15s\n\
+        # 1. Autenticacao no Odoo\n\
         res_auth = requests.post(f"{url}/jsonrpc", json={\n\
             "jsonrpc": "2.0", "method": "call",\n\
             "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
@@ -70,8 +67,31 @@ async def query_odoo(request: Request):\n\
         if not uid:\n\
             return {"status": "error", "message": "Falha na autenticacao do Odoo"}\n\
             \n\
-        # 2. Count com timeout de 20s\n\
-        if action == "count":\n\
+        # 2. Acao: AGGREGATE (Somas, Medias, Totais via read_group do Odoo)\n\
+        if action == "aggregate":\n\
+            agg_field = payload.get("agg_field", "amount_total")\n\
+            groupby = payload.get("groupby", [])\n\
+            if isinstance(groupby, str) and groupby.strip() and groupby != "{groupby}":\n\
+                try:\n\
+                    groupby = json.loads(groupby)\n\
+                except Exception:\n\
+                    groupby = [groupby]\n\
+            elif not isinstance(groupby, list):\n\
+                groupby = []\n\
+                \n\
+            res = requests.post(f"{url}/jsonrpc", json={\n\
+                "jsonrpc": "2.0", "method": "call",\n\
+                "params": {\n\
+                    "service": "object",\n\
+                    "method": "execute_kw",\n\
+                    "args": [db, uid, password, model, "read_group", [domain], [agg_field], groupby]\n\
+                },\n\
+                "id": 2\n\
+            }, timeout=20)\n\
+            return {"status": "success", "result": res.json().get("result", [])}\n\
+            \n\
+        # 3. Acao: COUNT (Contagem simples de registos)\n\
+        elif action == "count":\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
                 "params": {\n\
@@ -83,8 +103,17 @@ async def query_odoo(request: Request):\n\
             }, timeout=20)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
             \n\
-        # 3. Read com timeout de 20s e campos leves\n\
+        # 4. Acao: READ (Leitura com selecao automatica ou explicita de campos)\n\
         else:\n\
+            fields = payload.get("fields")\n\
+            if isinstance(fields, str) and fields.strip() and fields != "{fields}":\n\
+                try:\n\
+                    fields = json.loads(fields)\n\
+                except Exception:\n\
+                    fields = None\n\
+            if not fields or not isinstance(fields, list):\n\
+                fields = KNOWN_FIELDS.get(model, ["id", "display_name"])\n\
+                \n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
                 "params": {\n\
