@@ -28,6 +28,7 @@ async def query_odoo(request: Request):\n\
     domain = payload.get("domain", [])\n\
     action = payload.get("action", "count")\n\
     limit = payload.get("limit", 5)\n\
+    offset = payload.get("offset", 0)\n\
     \n\
     fields = payload.get("fields")\n\
     if not fields:\n\
@@ -36,7 +37,9 @@ async def query_odoo(request: Request):\n\
         elif model == "hr.employee":\n\
             fields = ["id", "name", "work_email", "work_phone"]\n\
         elif model == "sale.order":\n\
-            fields = ["id", "name", "partner_id", "amount_total", "state"]\n\
+            fields = ["id", "name", "partner_id", "amount_total", "state", "date_order"]\n\
+        elif model == "account.move":\n\
+            fields = ["id", "name", "partner_id", "amount_total", "state", "invoice_date", "move_type"]\n\
         else:\n\
             fields = ["id", "display_name"]\n\
             \n\
@@ -64,14 +67,14 @@ async def query_odoo(request: Request):\n\
             }, timeout=8)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
             \n\
-        # 3. Execucao de Read\n\
+        # 3. Execucao de Read (Com suporte a limit, offset e ordenacao recente)\n\
         else:\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
                 "params": {\n\
                     "service": "object",\n\
                     "method": "execute_kw",\n\
-                    "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit}]\n\
+                    "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit, "offset": offset, "order": "id desc"}]\n\
                 },\n\
                 "id": 2\n\
             }, timeout=8)\n\
