@@ -44,12 +44,16 @@ async def query_odoo(request: Request):\n\
     except Exception:\n\
         offset = 0\n\
         \n\
-    # Normalizacao segura do domain\n\
+    # Sanitizacao robusta do domain para aceitar ilike / like\n\
     raw_domain = payload.get("domain", [])\n\
     if isinstance(raw_domain, str):\n\
-        try:\n\
-            domain = json.loads(raw_domain) if raw_domain.strip() and raw_domain != "{domain}" else []\n\
-        except Exception:\n\
+        raw_domain_clean = raw_domain.strip()\n\
+        if raw_domain_clean and raw_domain_clean != "{domain}":\n\
+            try:\n\
+                domain = json.loads(raw_domain_clean)\n\
+            except Exception:\n\
+                domain = []\n\
+        else:\n\
             domain = []\n\
     elif isinstance(raw_domain, list):\n\
         domain = raw_domain\n\
@@ -57,7 +61,7 @@ async def query_odoo(request: Request):\n\
         domain = []\n\
         \n\
     try:\n\
-        # 1. Autenticacao no Odoo\n\
+        # 1. Login\n\
         res_auth = requests.post(f"{url}/jsonrpc", json={\n\
             "jsonrpc": "2.0", "method": "call",\n\
             "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
@@ -67,7 +71,7 @@ async def query_odoo(request: Request):\n\
         if not uid:\n\
             return {"status": "error", "message": "Falha na autenticacao do Odoo"}\n\
             \n\
-        # 2. Acao: AGGREGATE (Somas, Medias, Totais via read_group do Odoo)\n\
+        # 2. Action: AGGREGATE\n\
         if action == "aggregate":\n\
             agg_field = payload.get("agg_field", "amount_total")\n\
             groupby = payload.get("groupby", [])\n\
@@ -90,7 +94,7 @@ async def query_odoo(request: Request):\n\
             }, timeout=20)\n\
             return {"status": "success", "result": res.json().get("result", [])}\n\
             \n\
-        # 3. Acao: COUNT (Contagem simples de registos)\n\
+        # 3. Action: COUNT\n\
         elif action == "count":\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
@@ -103,7 +107,7 @@ async def query_odoo(request: Request):\n\
             }, timeout=20)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
             \n\
-        # 4. Acao: READ (Leitura com selecao automatica ou explicita de campos)\n\
+        # 4. Action: READ\n\
         else:\n\
             fields = payload.get("fields")\n\
             if isinstance(fields, str) and fields.strip() and fields != "{fields}":\n\
