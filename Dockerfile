@@ -3,14 +3,19 @@ FROM python:3.11-slim
 RUN pip install --no-cache-dir fastapi uvicorn requests
 
 RUN echo 'import os, requests\n\
-from fastapi import FastAPI, Body\n\
+from fastapi import FastAPI, Request\n\
 from fastapi.middleware.cors import CORSMiddleware\n\
 \n\
 app = FastAPI()\n\
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])\n\
 \n\
 @app.post("/query")\n\
-def query_odoo(payload: dict = Body(...)):\n\
+async def query_odoo(request: Request):\n\
+    try:\n\
+        payload = await request.json()\n\
+    except Exception:\n\
+        payload = {}\n\
+        \n\
     url = os.environ.get("ODOO_URL", "").rstrip("/")\n\
     db = os.environ.get("ODOO_DB")\n\
     username = os.environ.get("ODOO_USERNAME")\n\
@@ -59,7 +64,7 @@ def query_odoo(payload: dict = Body(...)):\n\
             }, timeout=8)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
             \n\
-        # 3. Execucao de Read (Odoo requer kwargs como 6º argumento em args)\n\
+        # 3. Execucao de Read\n\
         else:\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
