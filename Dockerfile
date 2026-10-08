@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 RUN pip install --no-cache-dir fastapi uvicorn requests
 
-RUN echo 'import os, requests\n\
+RUN echo 'import os, requests, json\n\
 from fastapi import FastAPI, Request\n\
 from fastapi.middleware.cors import CORSMiddleware\n\
 \n\
@@ -25,11 +25,22 @@ async def query_odoo(request: Request):\n\
         url = "https://" + url\n\
         \n\
     model = payload.get("model", "sale.order")\n\
-    domain = payload.get("domain", [])\n\
     action = payload.get("action", "count")\n\
-    limit = payload.get("limit", 5)\n\
-    offset = payload.get("offset", 0)\n\
+    limit = int(payload.get("limit", 5))\n\
+    offset = int(payload.get("offset", 0))\n\
     \n\
+    # Tratamento seguro para o domain (garante que e uma lista Python valida)\n\
+    raw_domain = payload.get("domain", [])\n\
+    if isinstance(raw_domain, str):\n\
+        try:\n\
+            domain = json.loads(raw_domain)\n\
+        except Exception:\n\
+            domain = []\n\
+    elif isinstance(raw_domain, list):\n\
+        domain = raw_domain\n\
+    else:\n\
+        domain = []\n\
+        \n\
     fields = payload.get("fields")\n\
     if not fields:\n\
         if model == "res.partner":\n\
@@ -44,7 +55,7 @@ async def query_odoo(request: Request):\n\
             fields = ["id", "display_name"]\n\
             \n\
     try:\n\
-        # 1. Login\n\
+        # 1. Autenticacao\n\
         res_auth = requests.post(f"{url}/jsonrpc", json={\n\
             "jsonrpc": "2.0", "method": "call",\n\
             "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
@@ -67,7 +78,7 @@ async def query_odoo(request: Request):\n\
             }, timeout=8)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
             \n\
-        # 3. Execucao de Read (Com suporte a limit, offset e ordenacao recente)\n\
+        # 3. Execucao de Read\n\
         else:\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
