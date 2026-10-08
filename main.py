@@ -1,4 +1,4 @@
-import os, requests, json
+import os, requests, json, ast
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +16,41 @@ DEFAULT_FIELDS = {
     "product.template": ["id", "name", "list_price", "qty_available"]
 }
 
+def clean_domain(domain_raw):
+    """Garante que o domain e retornado como uma lista de filtros Python valida."""
+    if not domain_raw:
+        return []
+    
+    if isinstance(domain_raw, str):
+        try:
+            domain_raw = json.loads(domain_raw)
+        except Exception:
+            try:
+                domain_raw = ast.literal_eval(domain_raw)
+            except Exception:
+                return []
+
+    if isinstance(domain_raw, list):
+        cleaned = []
+        for item in domain_raw:
+            if isinstance(item, str):
+                try:
+                    parsed_item = json.loads(item)
+                    if isinstance(parsed_item, list):
+                        cleaned.append(parsed_item)
+                except Exception:
+                    try:
+                        parsed_item = ast.literal_eval(item)
+                        if isinstance(parsed_item, list):
+                            cleaned.append(parsed_item)
+                    except Exception:
+                        pass
+            elif isinstance(item, list):
+                cleaned.append(item)
+        return cleaned
+
+    return []
+
 @app.post("/query")
 async def query_odoo(request: Request):
     try:
@@ -26,16 +61,12 @@ async def query_odoo(request: Request):
             body = json.loads(body_bytes.decode("utf-8").strip())
 
         model = body.get("model", "hr.employee")
-        domain = body.get("domain") or []
+        raw_domain = body.get("domain") or []
         limit = int(body.get("limit", 5))
         order = body.get("order", "id desc")
 
-        if isinstance(domain, str):
-            try:
-                domain = json.loads(domain.replace("'", '"'))
-            except Exception:
-                domain = []
-
+        # Limpeza rigorosa do domain
+        domain = clean_domain(raw_domain)
         fields = DEFAULT_FIELDS.get(model, ["id", "display_name"])
 
         url = os.environ.get("ODOO_URL", "").rstrip("/")
