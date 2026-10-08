@@ -9,8 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware\n\
 app = FastAPI()\n\
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])\n\
 \n\
-DEFAULT_FIELDS = ["id", "name", "display_name", "email", "phone", "state", "amount_total", "date_order"]\n\
-\n\
 @app.post("/query")\n\
 def query_odoo(payload: dict = Body(...)):\n\
     url = os.environ.get("ODOO_URL", "").rstrip("/")\n\
@@ -24,9 +22,20 @@ def query_odoo(payload: dict = Body(...)):\n\
     model = payload.get("model", "sale.order")\n\
     domain = payload.get("domain", [])\n\
     action = payload.get("action", "count")\n\
-    requested_fields = payload.get("fields") or []\n\
     limit = payload.get("limit", 5)\n\
     \n\
+    # Define campos padrao seguros caso nao venham especificados\n\
+    fields = payload.get("fields")\n\
+    if not fields:\n\
+        if model == "res.partner":\n\
+            fields = ["id", "name", "email", "phone"]\n\
+        elif model == "hr.employee":\n\
+            fields = ["id", "name", "work_email", "work_phone"]\n\
+        elif model == "sale.order":\n\
+            fields = ["id", "name", "partner_id", "amount_total", "state"]\n\
+        else:\n\
+            fields = ["id", "display_name"]\n\
+            \n\
     try:\n\
         # 1. Login\n\
         res_auth = requests.post(f"{url}/jsonrpc", json={\n\
@@ -47,14 +56,9 @@ def query_odoo(payload: dict = Body(...)):\n\
             }, timeout=8)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
         else:\n\
-            # Se o AI nao especificou campos, usamos a lista inteligente e lemos os campos disponiveis no modelo\n\
-            read_kwargs = {"limit": limit}\n\
-            if requested_fields:\n\
-                read_kwargs["fields"] = requested_fields\n\
-                \n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
-                "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, model, "search_read", [domain]], "kwargs": read_kwargs},\n\
+                "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit}]},\n\
                 "id": 2\n\
             }, timeout=8)\n\
             return {"status": "success", "data": res.json().get("result", [])}\n\
