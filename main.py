@@ -10,6 +10,7 @@ DEFAULT_FIELDS = {
     "hr.employee": ["id", "name", "work_email", "job_title", "department_id"],
     "res.partner": ["id", "name", "email", "phone", "vat", "street", "city"],
     "sale.order": ["id", "name", "partner_id", "amount_total", "state", "date_order"],
+    "account.move": ["id", "name", "partner_id", "amount_total", "state", "invoice_date"],
     "product.product": ["id", "display_name", "list_price", "qty_available"]
 }
 
@@ -22,10 +23,11 @@ async def query_odoo(request: Request):
             body_bytes = await request.body()
             body = json.loads(body_bytes.decode("utf-8").strip())
 
-        # Parâmetros estáveis
+        # Parâmetros
         model = body.get("model", "hr.employee")
         domain = body.get("domain") or []
         limit = int(body.get("limit", 5))
+        order = body.get("order", "id desc")
 
         # Garantir que domain é lista
         if isinstance(domain, str):
@@ -60,7 +62,7 @@ async def query_odoo(request: Request):
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
 
-        # 2. Se limit == 0, faz CONTAGEM (search_count)
+        # 2. Contagem (se limit == 0)
         if limit == 0:
             count_rpc = {
                 "jsonrpc": "2.0",
@@ -76,7 +78,7 @@ async def query_odoo(request: Request):
             count_val = res_count.json().get("result", 0)
             return JSONResponse(content={"status": "success", "count": count_val}, status_code=200)
 
-        # 3. Se limit > 0, faz LEITURA (search_read)
+        # 3. Leitura com Ordenação (search_read)
         else:
             read_rpc = {
                 "jsonrpc": "2.0",
@@ -84,7 +86,11 @@ async def query_odoo(request: Request):
                 "params": {
                     "service": "object",
                     "method": "execute_kw",
-                    "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit}]
+                    "args": [db, uid, password, model, "search_read", [domain], {
+                        "fields": fields, 
+                        "limit": limit,
+                        "order": order
+                    }]
                 },
                 "id": 2
             }
