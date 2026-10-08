@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware\n\
 app = FastAPI()\n\
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])\n\
 \n\
+DEFAULT_FIELDS = ["id", "name", "display_name", "email", "phone", "state", "amount_total", "date_order"]\n\
+\n\
 @app.post("/query")\n\
 def query_odoo(payload: dict = Body(...)):\n\
     url = os.environ.get("ODOO_URL", "").rstrip("/")\n\
@@ -21,12 +23,12 @@ def query_odoo(payload: dict = Body(...)):\n\
         \n\
     model = payload.get("model", "sale.order")\n\
     domain = payload.get("domain", [])\n\
-    action = payload.get("action", "count")  # "count" ou "read"\n\
-    fields = payload.get("fields", ["id", "name"])\n\
-    limit = payload.get("limit", 10)\n\
+    action = payload.get("action", "count")\n\
+    requested_fields = payload.get("fields") or []\n\
+    limit = payload.get("limit", 5)\n\
     \n\
     try:\n\
-        # 1. Login no Odoo\n\
+        # 1. Login\n\
         res_auth = requests.post(f"{url}/jsonrpc", json={\n\
             "jsonrpc": "2.0", "method": "call",\n\
             "params": {"service": "common", "method": "login", "args": [db, username, password]},\n\
@@ -36,7 +38,7 @@ def query_odoo(payload: dict = Body(...)):\n\
         if not uid:\n\
             return {"status": "error", "message": "Falha na autenticacao do Odoo"}\n\
             \n\
-        # 2. Execucao dinamica da consulta\n\
+        # 2. Execucao dinamica\n\
         if action == "count":\n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
@@ -45,9 +47,14 @@ def query_odoo(payload: dict = Body(...)):\n\
             }, timeout=8)\n\
             return {"status": "success", "count": res.json().get("result", 0)}\n\
         else:\n\
+            # Se o AI nao especificou campos, usamos a lista inteligente e lemos os campos disponiveis no modelo\n\
+            read_kwargs = {"limit": limit}\n\
+            if requested_fields:\n\
+                read_kwargs["fields"] = requested_fields\n\
+                \n\
             res = requests.post(f"{url}/jsonrpc", json={\n\
                 "jsonrpc": "2.0", "method": "call",\n\
-                "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, model, "search_read", [domain], {"fields": fields, "limit": limit}]},\n\
+                "params": {"service": "object", "method": "execute_kw", "args": [db, uid, password, model, "search_read", [domain]], "kwargs": read_kwargs},\n\
                 "id": 2\n\
             }, timeout=8)\n\
             return {"status": "success", "data": res.json().get("result", [])}\n\
