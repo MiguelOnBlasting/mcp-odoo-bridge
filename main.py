@@ -24,7 +24,7 @@ DEFAULT_FIELDS = {
 }
 
 def clean_domain(domain_raw):
-    """Normaliza e limpa a lista de filtros domain."""
+    """Normaliza e limpa a lista de filtros domain, removendo aspas externas de arrays serializados."""
     if not domain_raw:
         return []
     
@@ -59,15 +59,13 @@ def clean_domain(domain_raw):
     return []
 
 def resolve_partner_domain(domain, url, db, uid, password):
-    """Traduções automáticas de nomes de parceiros em IDs caso o Odoo exija IDs diretos."""
+    """Traduções automáticas de nomes de parceiros em IDs."""
     new_domain = []
     for clause in domain:
         if isinstance(clause, list) and len(clause) == 3:
             field, op, val = clause[0], clause[1], clause[2]
-            # Se for filtro por partner_id com texto em ilike
             if field in ["partner_id", "order_partner_id", "partner_id.name"] and op in ["ilike", "="] and isinstance(val, str):
                 try:
-                    # Procura os IDs dos parceiros correspondentes ao nome
                     res = requests.post(f"{url}/jsonrpc", json={
                         "jsonrpc": "2.0", "method": "call",
                         "params": {
@@ -82,7 +80,6 @@ def resolve_partner_domain(domain, url, db, uid, password):
                         continue
                 except Exception:
                     pass
-            # Corrige parceiro_id.name para partner_id
             if field == "partner_id.name":
                 clause[0] = "partner_id"
         new_domain.append(clause)
@@ -116,7 +113,7 @@ async def query_odoo(request: Request):
         if not url.startswith("http"):
             url = "https://" + url
 
-        # 1. Login no Odoo
+        # Login Odoo
         auth_rpc = {
             "jsonrpc": "2.0",
             "method": "call",
@@ -129,11 +126,11 @@ async def query_odoo(request: Request):
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
 
-        # Trata resolução automática de clientes para modelos de linhas
+        # Trata resolução de parceiro em modelos de linhas
         if model in ["account.move.line", "sale.order.line"]:
             domain = resolve_partner_domain(domain, url, db, uid, password)
 
-        # 2. Contagem (se limit == 0)
+        # Contagem
         if limit == 0:
             count_rpc = {
                 "jsonrpc": "2.0",
@@ -149,7 +146,7 @@ async def query_odoo(request: Request):
             count_val = res_count.json().get("result", 0)
             return JSONResponse(content={"status": "success", "count": count_val}, status_code=200)
 
-        # 3. Leitura com Ordenação (search_read)
+        # Leitura (search_read)
         else:
             read_rpc = {
                 "jsonrpc": "2.0",
@@ -167,6 +164,14 @@ async def query_odoo(request: Request):
             }
             res_data = requests.post(f"{url}/jsonrpc", json=read_rpc, timeout=15)
             result = res_data.json().get("result", [])
+
+            # Injeta preço líquido real calculado
+            if isinstance(result, list) and model in ["account.move.line", "sale.order.line"]:
+                for line in result:
+                    p_unit = line.get("price_unit", 0) or 0
+                    disc = line.get("discount", 0) or 0
+                    line["net_unit_price"] = round(p_unit * (1 - disc / 100.0), 2)
+
             return JSONResponse(content={"status": "success", "data": result}, status_code=200)
 
     except Exception as e:
