@@ -24,6 +24,7 @@ DEFAULT_FIELDS = {
 }
 
 def clean_domain(domain_raw):
+    """Normaliza e limpa a lista de filtros domain."""
     if not domain_raw:
         return []
     if isinstance(domain_raw, str):
@@ -49,12 +50,19 @@ def clean_domain(domain_raw):
         return cleaned
     return []
 
-def resolve_partner_domain(domain, url, db, uid, password):
+def resolve_partner_domain(domain, url, db, uid, password, model):
+    """Resolve pesquisas de parceiros por texto em IDs reais do Odoo e limpa campos incompatíveis."""
     new_domain = []
     for clause in domain:
         if isinstance(clause, list) and len(clause) == 3:
             field, op, val = clause[0], clause[1], clause[2]
-            if field in ["partner_id", "order_partner_id", "partner_id.name"] and op in ["ilike", "="] and isinstance(val, str):
+            
+            # Limpa move_type em account.move.line se vier incorreto
+            if model == "account.move.line" and field in ["move_type", "move_id.move_type"]:
+                continue
+                
+            # Pesquisa por texto do cliente em campos de parceiro
+            if field in ["partner_id", "order_partner_id", "partner_id.name", "partner_id.display_name"] and op in ["ilike", "="] and isinstance(val, str):
                 try:
                     res = requests.post(f"{url}/jsonrpc", json={
                         "jsonrpc": "2.0", "method": "call",
@@ -69,8 +77,6 @@ def resolve_partner_domain(domain, url, db, uid, password):
                         new_domain.append([target_field, "in", partner_ids])
                         continue
                 except Exception: pass
-            if field == "partner_id.name":
-                clause[0] = "partner_id"
         new_domain.append(clause)
     return new_domain
 
@@ -111,8 +117,9 @@ async def query_odoo(request: Request):
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
 
+        # Trata resolução de parceiros em modelos de linhas
         if model in ["account.move.line", "sale.order.line"]:
-            domain = resolve_partner_domain(domain, url, db, uid, password)
+            domain = resolve_partner_domain(domain, url, db, uid, password, model)
 
         # 1. Agrupamento / Totais Acumulados (read_group)
         if groupby and isinstance(groupby, list):
