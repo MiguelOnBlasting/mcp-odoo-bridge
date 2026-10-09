@@ -51,17 +51,15 @@ def clean_domain(domain_raw):
     return []
 
 def resolve_partner_domain(domain, url, db, uid, password, model):
-    """Resolve pesquisas de parceiros por texto em IDs reais do Odoo e limpa campos incompatíveis."""
+    """Resolve nomes de clientes em IDs de parceiros no Odoo."""
     new_domain = []
     for clause in domain:
         if isinstance(clause, list) and len(clause) == 3:
             field, op, val = clause[0], clause[1], clause[2]
             
-            # Limpa move_type em account.move.line se vier incorreto
             if model == "account.move.line" and field in ["move_type", "move_id.move_type"]:
                 continue
                 
-            # Pesquisa por texto do cliente em campos de parceiro
             if field in ["partner_id", "order_partner_id", "partner_id.name", "partner_id.display_name"] and op in ["ilike", "="] and isinstance(val, str):
                 try:
                     res = requests.post(f"{url}/jsonrpc", json={
@@ -83,18 +81,37 @@ def resolve_partner_domain(domain, url, db, uid, password, model):
 @app.post("/query")
 async def query_odoo(request: Request):
     try:
-        try: body = await request.json()
+        model = "hr.employee"
+        domain = []
+        limit = 5
+        order = "id desc"
+        groupby = None
+
+        try:
+            body = await request.json()
         except Exception:
             body_bytes = await request.body()
             body = json.loads(body_bytes.decode("utf-8").strip())
 
-        model = body.get("model", "hr.employee")
-        raw_domain = body.get("domain") or []
-        limit = int(body.get("limit", 5))
-        order = body.get("order", "id desc")
-        groupby = body.get("groupby")
+        if isinstance(body, dict):
+            model = body.get("model", "hr.employee")
+            raw_domain = body.get("domain") or []
+            limit = int(body.get("limit", 5))
+            order = body.get("order", "id desc")
+            groupby = body.get("groupby")
+            domain = clean_domain(raw_domain)
+        elif isinstance(body, list):
+            for item in body:
+                if isinstance(item, int): limit = item
+                elif isinstance(item, str):
+                    if "." in item: model = item
+                    elif "desc" in item or "asc" in item: order = item
+                elif isinstance(item, list):
+                    if len(item) > 0 and isinstance(item[0], str) and not isinstance(item[0], list):
+                        groupby = item
+                    else:
+                        domain = clean_domain(item)
 
-        domain = clean_domain(raw_domain)
         fields = DEFAULT_FIELDS.get(model, ["id", "display_name"])
 
         url = os.environ.get("ODOO_URL", "").rstrip("/")
@@ -117,11 +134,10 @@ async def query_odoo(request: Request):
         if not uid:
             return JSONResponse(content={"status": "error", "message": "Falha de autenticacao no Odoo."}, status_code=200)
 
-        # Trata resolução de parceiros em modelos de linhas
         if model in ["account.move.line", "sale.order.line"]:
             domain = resolve_partner_domain(domain, url, db, uid, password, model)
 
-        # 1. Agrupamento / Totais Acumulados (read_group)
+        # 1. Agrupamento (read_group)
         if groupby and isinstance(groupby, list):
             group_rpc = {
                 "jsonrpc": "2.0", "method": "call",
